@@ -15,6 +15,7 @@ obj-$(CONFIG_SPI_ATMEL)			+= spi-atmel.o
 obj-$(CONFIG_SPI_ATH79)			+= spi-ath79.o
 obj-$(CONFIG_SPI_AU1550)		+= spi-au1550.o
 obj-$(CONFIG_SPI_BCM2835)		+= spi-bcm2835.o
+obj-$(CONFIG_SPI_BCM2835DMA)		+= spi-bcm2835dma.o
 obj-$(CONFIG_SPI_BCM63XX)		+= spi-bcm63xx.o
 obj-$(CONFIG_SPI_BFIN5XX)		+= spi-bfin5xx.o
 obj-$(CONFIG_SPI_BCM2708)		+= spi-bcm2708.o

@@ -86,6 +86,20 @@ config SPI_BCM2835
 	  is for the regular SPI controller. Slave mode operation is not also
 	  not supported.
 
+config SPI_BCM2835DMA
+	tristate "BCM2835 SPI controller DMA"
+	depends on (ARCH_BCM2835 || ARCH_BCM2708)
+	help
+	  This selects a driver for the Broadcom BCM2835 SPI master
+	  with pipelined DMA transfers for highest truput speeds.
+	  for best performance the device drivers must schedule
+	  multiple transfers asyncronously.
+
+	  The BCM2835 contains two types of SPI master controller; the
+	  "universal SPI master", and the regular SPI controller. This driver
+	  is for the regular SPI controller. Slave mode operation is not also
+	  not supported.
+
 config SPI_BCM2708
 	tristate "BCM2708 SPI controller driver (SPI0)"
 	depends on MACH_BCM2708
