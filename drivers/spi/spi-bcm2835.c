@@ -75,6 +75,10 @@
 
 #define DRV_NAME	"spi-bcm2835"
 
+static bool realtime = 1;
+module_param(realtime, bool, 0);
+MODULE_PARM_DESC(realtime, "Run the driver with realtime priority");
+
 struct bcm2835_spi {
 	void __iomem *regs;
 	struct clk *clk;
@@ -319,6 +323,7 @@ static int bcm2835_spi_probe(struct platform_device *pdev)
 	master->num_chipselect = 3;
 	master->transfer_one_message = bcm2835_spi_transfer_one;
 	master->dev.of_node = pdev->dev.of_node;
+	master->rt = realtime;
 
 	bs = spi_master_get_devdata(master);
 
