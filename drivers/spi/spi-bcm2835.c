@@ -73,6 +73,8 @@
 #define BCM2835_SPI_TIMEOUT_MS	30000
 #define BCM2835_SPI_MODE_BITS	(SPI_CPOL | SPI_CPHA | SPI_CS_HIGH | SPI_NO_CS)
 
+#define BCM2835_SPI_NUM_CS	3
+
 #define DRV_NAME	"spi-bcm2835"
 
 static bool realtime = 1;
@@ -87,6 +89,8 @@ struct bcm2835_spi {
 	const u8 *tx_buf;
 	u8 *rx_buf;
 	int len;
+	u32 cs_device_flags_idle;
+	u32 cs_device_flags[BCM2835_SPI_NUM_CS];
 };
 
 static inline u32 bcm2835_rd(struct bcm2835_spi *bs, unsigned reg)
@@ -207,19 +211,8 @@ static int bcm2835_spi_start_transfer(struct spi_device *spi,
 	} else
 		cdiv = 0; /* 0 is the slowest we can go */
 
-	if (spi->mode & SPI_CPOL)
-		cs |= BCM2835_SPI_CS_CPOL;
-	if (spi->mode & SPI_CPHA)
-		cs |= BCM2835_SPI_CS_CPHA;
-
-	if (!(spi->mode & SPI_NO_CS)) {
-		if (spi->mode & SPI_CS_HIGH) {
-			cs |= BCM2835_SPI_CS_CSPOL;
-			cs |= BCM2835_SPI_CS_CSPOL0 << spi->chip_select;
-		}
-
-		cs |= spi->chip_select;
-	}
+	/* take cs from the precalculated version */
+	cs |= bs->cs_device_flags[spi->chip_select];
 
 	INIT_COMPLETION(bs->done);
 	bs->tx_buf = tfr->tx_buf;
@@ -295,7 +288,8 @@ static int bcm2835_spi_transfer_one(struct spi_master *master,
 out:
 	/* Clear FIFOs, and disable the HW block */
 	bcm2835_wr(bs, BCM2835_SPI_CS,
-		   BCM2835_SPI_CS_CLEAR_RX | BCM2835_SPI_CS_CLEAR_TX);
+		bs->cs_device_flags_idle
+		| BCM2835_SPI_CS_CLEAR_RX | BCM2835_SPI_CS_CLEAR_TX);
 	mesg->status = err;
 	spi_finalize_current_message(master);
 
@@ -331,6 +325,36 @@ static void bcm2835_spi_init_pinmode(void) {
 }
 #endif
 
+static int bcm2835_spi_setup(struct spi_device *spi) {
+	struct bcm2835_spi *bs = spi_master_get_devdata(spi->master);
+	u8 cs = spi->chip_select;
+	u32 mode = spi->mode;
+
+	/* fill in cs flags based on device configs*/
+	if (!(mode & SPI_NO_CS)) {
+		/* if we are not configured with CS_HIGH */
+		if (mode & SPI_CS_HIGH) {
+			int i;
+			/* fill in the flags for all devices */
+			for (i=0;i<=BCM2835_SPI_NUM_CS;i++) {
+				bs->cs_device_flags[i] |= BCM2835_SPI_CS_CSPOL0 << cs;
+			}
+			/* the idle mode as well */
+			bs->cs_device_flags_idle |= BCM2835_SPI_CS_CSPOL0 << cs;
+			/* and the specific flag for this device */
+			bs->cs_device_flags[cs] |= BCM2835_SPI_CS_CSPOL;
+		}
+		bs->cs_device_flags[cs] |= spi->chip_select;
+	}
+	/* and set up the other stuff */ 
+	if (mode & SPI_CPOL)
+		bs->cs_device_flags[cs] |= BCM2835_SPI_CS_CPOL;
+	if (mode & SPI_CPHA)
+		bs->cs_device_flags[cs] |= BCM2835_SPI_CS_CPHA;
+	/* we could fail this device here immediately for 8 bit */
+	return 0;
+}
+
 static int bcm2835_spi_probe(struct platform_device *pdev)
 {
 	struct spi_master *master;
@@ -353,7 +377,8 @@ static int bcm2835_spi_probe(struct platform_device *pdev)
 #else
 	master->bus_num = -1;
 #endif
-	master->num_chipselect = 3;
+	master->num_chipselect = BCM2835_SPI_NUM_CS;
+	master->setup = bcm2835_spi_setup;
 	master->transfer_one_message = bcm2835_spi_transfer_one;
 	master->dev.of_node = pdev->dev.of_node;
 	master->rt = realtime;
