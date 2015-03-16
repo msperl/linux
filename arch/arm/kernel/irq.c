@@ -43,6 +43,9 @@
 #include <asm/mach/irq.h>
 #include <asm/mach/time.h>
 
+#include "bcm2835-gpio-debugpin.h"
+DEFINE_DEBUG_FUNC(_irq,19);
+
 unsigned long irq_err_count;
 
 int arch_show_interrupts(struct seq_file *p, int prec)
@@ -65,7 +68,9 @@ int arch_show_interrupts(struct seq_file *p, int prec)
  */
 void handle_IRQ(unsigned int irq, struct pt_regs *regs)
 {
+	debug_set_high_irq();
 	__handle_domain_irq(NULL, irq, false, regs);
+	debug_set_low_irq();
 }
 
 /*
@@ -100,7 +105,7 @@ EXPORT_SYMBOL_GPL(set_irq_flags);
 void __init init_IRQ(void)
 {
 	int ret;
-
+debug_set_low_irq();
 	if (IS_ENABLED(CONFIG_OF) && !machine_desc->init_irq)
 		irqchip_init();
 	else

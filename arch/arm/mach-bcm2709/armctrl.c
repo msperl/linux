@@ -30,6 +30,10 @@
 #include <mach/hardware.h>
 #include "armctrl.h"
 
+#include "bcm2835-gpio-debugpin.h"
+DEFINE_DEBUG_FUNC(_mask,20);
+DEFINE_DEBUG_FUNC(_unmask,21);
+
 /* For support of kernels >= 3.0 assume only one VIC for now*/
 static unsigned int remap_irqs[(INTERRUPT_ARASANSDIO + 1) - INTERRUPT_JPEG] = {
 	INTERRUPT_VC_JPEG,
@@ -54,6 +58,7 @@ static void armctrl_mask_irq(struct irq_data *d)
 		0
 	};
 	int i;
+	debug_set_high_mask();
 	if (d->irq >= FIQ_START) {
 		writel(0, __io_address(ARM_IRQ_FAST));
 	} else if (d->irq >= IRQ_ARM_LOCAL_CNTPSIRQ && d->irq < IRQ_ARM_LOCAL_CNTPSIRQ + 4) {
@@ -79,6 +84,7 @@ static void armctrl_mask_irq(struct irq_data *d)
 	} else if (d->irq == INTERRUPT_ARM_LOCAL_PMU_FAST) {
 		writel(0xf, __io_address(ARM_LOCAL_PM_ROUTING_CLR));
 	} else { printk("%s: %d\n", __func__, d->irq); BUG(); }
+	debug_set_low_mask();
 }
 
 static void armctrl_unmask_irq(struct irq_data *d)
@@ -90,6 +96,7 @@ static void armctrl_unmask_irq(struct irq_data *d)
 		0
 	};
 	int i;
+	debug_set_high_unmask();
 	if (d->irq >= FIQ_START) {
 		unsigned int data;
 		if (num_online_cpus() > 1) {
@@ -124,6 +131,7 @@ static void armctrl_unmask_irq(struct irq_data *d)
 	} else if (d->irq == INTERRUPT_ARM_LOCAL_PMU_FAST) {
 		writel(0xf, __io_address(ARM_LOCAL_PM_ROUTING_SET));
 	} else { printk("%s: %d\n", __func__, d->irq); BUG(); }
+	debug_set_low_unmask();
 }
 
 #ifdef CONFIG_OF
@@ -362,6 +370,7 @@ int __init armctrl_init(void __iomem * base, unsigned int irq_start,
 		irq_set_chip_data(irq, (void *)data);
 	}
 
+	alloc_gpio();
 	armctrl_pm_register(base, irq_start, resume_sources);
 	init_FIQ(FIQ_START);
 	armctrl_dt_init();

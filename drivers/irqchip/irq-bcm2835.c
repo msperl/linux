@@ -54,6 +54,10 @@
 #include <asm/mach/irq.h>
 
 #include "irqchip.h"
+#include "bcm2835-gpio-debugpin.h"
+DEFINE_DEBUG_PIN(_handle);
+DEFINE_DEBUG_PIN(_loop);
+DEFINE_DEBUG_PIN(_bank);
 
 /* Put the bank and irq (32 bits) into the hwirq */
 #define MAKE_HWIRQ(b, n)	((b << 5) | (n))
@@ -145,6 +149,10 @@ static int __init armctrl_of_init(struct device_node *node,
 	void __iomem *base;
 	int irq, b, i;
 
+	debug_set_high_handle();
+	debug_set_high_loop();
+	debug_set_high_bank();
+
 	base = of_iomap(node, 0);
 	if (!base)
 		panic("%s: unable to map IC registers\n",
@@ -182,11 +190,13 @@ static int __init armctrl_of_init(struct device_node *node,
 static void armctrl_handle_bank(int bank, struct pt_regs *regs)
 {
 	u32 stat, irq;
+	debug_set_low_bank();
 
 	while ((stat = readl_relaxed(intc.pending[bank]))) {
 		irq = MAKE_HWIRQ(bank, ffs(stat) - 1);
 		handle_IRQ(irq_linear_revmap(intc.domain, irq), regs);
 	}
+	debug_set_high_bank();
 }
 
 static void armctrl_handle_shortcut(int bank, struct pt_regs *regs,
@@ -200,8 +210,9 @@ static void __exception_irq_entry bcm2835_handle_irq(
 	struct pt_regs *regs)
 {
 	u32 stat, irq;
-
+	debug_set_low_handle();
 	while ((stat = readl_relaxed(intc.pending[0]) & BANK0_VALID_MASK)) {
+		debug_set_low_loop();
 		if (stat & BANK0_HWIRQ_MASK) {
 			irq = MAKE_HWIRQ(0, ffs(stat & BANK0_HWIRQ_MASK) - 1);
 			handle_IRQ(irq_linear_revmap(intc.domain, irq), regs);
@@ -216,7 +227,9 @@ static void __exception_irq_entry bcm2835_handle_irq(
 		} else {
 			BUG();
 		}
+		debug_set_high_loop();
 	}
+	debug_set_high_handle();
 }
 
 IRQCHIP_DECLARE(bcm2835_armctrl_ic, "brcm,bcm2835-armctrl-ic", armctrl_of_init);
