@@ -24,7 +24,9 @@
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/list.h>
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 #include <linux/platform_data/dma-bcm2708.h>
+#endif
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/printk.h>
@@ -54,9 +56,11 @@ static int fbheight = 480; /* module parameter */
 static int fbdepth = 16;   /* module parameter */
 static int fbswap = 0;     /* module parameter */
 
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 static u32 dma_busy_wait_threshold = 1<<15;
 module_param(dma_busy_wait_threshold, int, 0644);
 MODULE_PARM_DESC(dma_busy_wait_threshold, "Busy-wait for DMA completion below this area");
+#endif
 
 struct fb_alloc_tags {
 	struct rpi_firmware_property_tag_header tag1;
@@ -73,11 +77,13 @@ struct fb_alloc_tags {
 	u32 pitch;
 };
 
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 struct bcm2708_fb_stats {
 	struct debugfs_regset32 regset;
 	u32 dma_copies;
 	u32 dma_irqs;
 };
+#endif
 
 struct bcm2708_fb {
 	struct fb_info fb;
@@ -85,6 +91,7 @@ struct bcm2708_fb {
 	struct rpi_firmware *fw;
 	u32 cmap[16];
 	u32 gpu_cmap[256];
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 	int dma_chan;
 	int dma_irq;
 	void __iomem *dma_chan_base;
@@ -93,11 +100,13 @@ struct bcm2708_fb {
 	struct dentry *debugfs_dir;
 	wait_queue_head_t dma_waitq;
 	struct bcm2708_fb_stats stats;
+#endif
 	unsigned long fb_bus_address;
 };
 
 #define to_bcm2708(info)	container_of(info, struct bcm2708_fb, fb)
 
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 static void bcm2708_fb_debugfs_deinit(struct bcm2708_fb *fb)
 {
 	debugfs_remove_recursive(fb->debugfs_dir);
@@ -140,6 +149,7 @@ fail:
 	bcm2708_fb_debugfs_deinit(fb);
 	return -EFAULT;
 }
+#endif
 
 static int bcm2708_fb_set_bitfields(struct fb_var_screeninfo *var)
 {
@@ -464,6 +474,7 @@ static void bcm2708_fb_fillrect(struct fb_info *info,
 	cfb_fillrect(info, rect);
 }
 
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 /* A helper function for configuring dma control block */
 static void set_dma_cb(struct bcm2708_dma_cb *cb,
 		       int        burst_size,
@@ -608,6 +619,13 @@ static void bcm2708_fb_copyarea(struct fb_info *info,
 	}
 	fb->stats.dma_copies++;
 }
+#else
+static void bcm2708_fb_copyarea(struct fb_info *info,
+				const struct fb_copyarea *region)
+{
+	return cfb_copyarea(info, region);
+}
+#endif
 
 static void bcm2708_fb_imageblit(struct fb_info *info,
 				 const struct fb_image *image)
@@ -616,6 +634,7 @@ static void bcm2708_fb_imageblit(struct fb_info *info,
 	cfb_imageblit(info, image);
 }
 
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 static irqreturn_t bcm2708_fb_dma_irq(int irq, void *cxt)
 {
 	struct bcm2708_fb *fb = cxt;
@@ -633,6 +652,7 @@ static irqreturn_t bcm2708_fb_dma_irq(int irq, void *cxt)
 	wake_up(&fb->dma_waitq);
 	return IRQ_HANDLED;
 }
+#endif
 
 static struct fb_ops bcm2708_fb_ops = {
 	.owner = THIS_MODULE,
@@ -683,8 +703,9 @@ static int bcm2708_fb_register(struct bcm2708_fb *fb)
 	fb->fb.monspecs.dclkmax = 100000000;
 
 	bcm2708_fb_set_bitfields(&fb->fb.var);
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 	init_waitqueue_head(&fb->dma_waitq);
-
+#endif
 	/*
 	 * Allocate colourmap.
 	 */
@@ -734,6 +755,7 @@ static int bcm2708_fb_probe(struct platform_device *dev)
 	}
 
 	fb->fw = fw;
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 	bcm2708_fb_debugfs_init(fb);
 
 	fb->cb_base = dma_alloc_writecombine(&dev->dev, SZ_64K,
@@ -765,7 +787,9 @@ static int bcm2708_fb_probe(struct platform_device *dev)
 
 	pr_info("BCM2708FB: allocated DMA channel %d @ %p\n",
 	       fb->dma_chan, fb->dma_chan_base);
-
+#else
+	pr_info("BCM2708FB: running without DMA\n");
+#endif
 	fb->dev = dev;
 	fb->fb.device = &dev->dev;
 
@@ -775,11 +799,13 @@ static int bcm2708_fb_probe(struct platform_device *dev)
 		goto out;
 	}
 
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 free_dma_chan:
 	bcm_dma_chan_free(fb->dma_chan);
 free_cb:
 	dma_free_writecombine(&dev->dev, SZ_64K, fb->cb_base, fb->cb_handle);
 free_fb:
+#endif
 	kfree(fb);
 free_region:
 	dev_err(&dev->dev, "probe failed, err %d\n", ret);
@@ -797,12 +823,14 @@ static int bcm2708_fb_remove(struct platform_device *dev)
 		iounmap(fb->fb.screen_base);
 	unregister_framebuffer(&fb->fb);
 
+#ifdef CONFIG_DMA_BCM2708_LEGACY
 	dma_free_writecombine(&dev->dev, SZ_64K, fb->cb_base, fb->cb_handle);
 	bcm_dma_chan_free(fb->dma_chan);
 
 	bcm2708_fb_debugfs_deinit(fb);
 
 	free_irq(fb->dma_irq, fb);
+#endif
 
 	kfree(fb);
 
