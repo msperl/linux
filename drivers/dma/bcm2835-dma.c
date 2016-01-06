@@ -962,7 +962,22 @@ static struct platform_driver bcm2835_dma_driver = {
 	},
 };
 
-module_platform_driver(bcm2835_dma_driver);
+static int bcm2835_dma_init(void)
+{
+	return platform_driver_register(&bcm2835_dma_driver);
+}
+
+static void bcm2835_dma_exit(void)
+{
+	platform_driver_unregister(&bcm2835_dma_driver);
+}
+
+/*
+ * Load after serial driver (arch_initcall) so we see the messages if it fails,
+ * but before drivers (module_init) that need a DMA channel.
+ */
+subsys_initcall(bcm2835_dma_init);
+module_exit(bcm2835_dma_exit);
 
 MODULE_ALIAS("platform:bcm2835-dma");
 MODULE_DESCRIPTION("BCM2835 DMA engine driver");
