@@ -37,6 +37,7 @@
 #include <linux/interrupt.h>
 #include <linux/list.h>
 #include <linux/module.h>
+#include <linux/platform_data/dma-bcm2708.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/io.h>
@@ -865,6 +866,13 @@ static int bcm2835_dma_probe(struct platform_device *pdev)
 
 	od->base = base;
 
+#if defined(CONFIG_DMA_BCM2708) || defined(CONFIG_DMA_BCM2708_MODULE)
+	rc = bcm_dmaman_probe(pdev, base, BCM2835_DMA_BULK_MASK);
+	if (rc)
+		dev_err(&pdev->dev,
+			"Failed to initialize the legacy API - %d\n", rc);
+#endif
+
 	dma_cap_set(DMA_SLAVE, od->ddev.cap_mask);
 	dma_cap_set(DMA_PRIVATE, od->ddev.cap_mask);
 	dma_cap_set(DMA_CYCLIC, od->ddev.cap_mask);
@@ -899,11 +907,10 @@ static int bcm2835_dma_probe(struct platform_device *pdev)
 		goto err_no_dma;
 	}
 
-	/*
-	 * Do not use the FIQ and BULK channels,
-	 * because they are used by the GPU.
-	 */
-	chans_available &= ~(BCM2835_DMA_FIQ_MASK | BCM2835_DMA_BULK_MASK);
+#if defined(CONFIG_DMA_BCM2708) || defined(CONFIG_DMA_BCM2708_MODULE)
+	/* Do not use the BULK channel (chan0) - it is used by legacy dma */
+	chans_available &= ~BCM2835_DMA_BULK_MASK;
+#endif
 
 	for (i = 0; i < pdev->num_resources; i++) {
 		irq = platform_get_irq(pdev, i);
@@ -947,6 +954,9 @@ static int bcm2835_dma_remove(struct platform_device *pdev)
 {
 	struct bcm2835_dmadev *od = platform_get_drvdata(pdev);
 
+#if defined(CONFIG_DMA_BCM2708) || defined(CONFIG_DMA_BCM2708_MODULE)
+	bcm_dmaman_remove(pdev);
+#endif
 	dma_async_device_unregister(&od->ddev);
 	bcm2835_dma_free(od);
 
