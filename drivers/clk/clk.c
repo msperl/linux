@@ -85,6 +85,8 @@ struct clk {
 	unsigned long min_rate;
 	unsigned long max_rate;
 	struct hlist_node clks_node;
+	unsigned int enable_count;
+	unsigned int prepare_count;
 };
 
 /***           locking             ***/
@@ -609,7 +611,11 @@ void clk_unprepare(struct clk *clk)
 		return;
 
 	clk_prepare_lock();
+	if (WARN_ON(clk->prepare_count == 0))
+		goto out;
+	clk->prepare_count--;
 	clk_core_unprepare(clk->core);
+out:
 	clk_prepare_unlock();
 }
 EXPORT_SYMBOL_GPL(clk_unprepare);
@@ -666,6 +672,7 @@ int clk_prepare(struct clk *clk)
 		return 0;
 
 	clk_prepare_lock();
+	clk->prepare_count++;
 	ret = clk_core_prepare(clk->core);
 	clk_prepare_unlock();
 
@@ -719,7 +726,11 @@ void clk_disable(struct clk *clk)
 		return;
 
 	flags = clk_enable_lock();
+	if (WARN_ON(clk->enable_count == 0))
+		goto out;
+	clk->enable_count--;
 	clk_core_disable(clk->core);
+out:
 	clk_enable_unlock(flags);
 }
 EXPORT_SYMBOL_GPL(clk_disable);
@@ -781,6 +792,7 @@ int clk_enable(struct clk *clk)
 		return 0;
 
 	flags = clk_enable_lock();
+	clk->enable_count++;
 	ret = clk_core_enable(clk->core);
 	clk_enable_unlock(flags);
 
