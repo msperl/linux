@@ -60,6 +60,8 @@ struct clk_core {
 	bool			orphan;
 	unsigned int		enable_count;
 	unsigned int		prepare_count;
+	bool			need_handoff_enable;
+	bool			need_handoff_prepare;
 	unsigned long		min_rate;
 	unsigned long		max_rate;
 	unsigned long		accuracy;
@@ -666,16 +668,31 @@ static int clk_core_prepare(struct clk_core *core)
  */
 int clk_prepare(struct clk *clk)
 {
-	int ret;
+	int ret = 0;
 
 	if (!clk)
 		return 0;
 
 	clk_prepare_lock();
 	clk->prepare_count++;
-	ret = clk_core_prepare(clk->core);
-	clk_prepare_unlock();
 
+	/*
+	 * setting CLK_ENABLE_HAND_OFF flag triggers this conditional
+	 *
+	 * need_handoff_prepare implies this clk was already prepared by
+	 * __clk_init. now we have a proper user, so unset the flag in our
+	 * internal bookkeeping. See CLK_ENABLE_HAND_OFF flag in clk-provider.h
+	 * for details.
+	 */
+	if (clk->core->need_handoff_prepare) {
+		clk->core->need_handoff_prepare = false;
+		goto out;
+	}
+
+	ret = clk_core_prepare(clk->core);
+
+out:
+	clk_prepare_unlock();
 	return ret;
 }
 EXPORT_SYMBOL_GPL(clk_prepare);
@@ -786,16 +803,31 @@ static int clk_core_enable(struct clk_core *core)
 int clk_enable(struct clk *clk)
 {
 	unsigned long flags;
-	int ret;
+	int ret = 0;
 
 	if (!clk)
 		return 0;
 
 	flags = clk_enable_lock();
 	clk->enable_count++;
-	ret = clk_core_enable(clk->core);
-	clk_enable_unlock(flags);
 
+	/*
+	 * setting CLK_ENABLE_HAND_OFF flag triggers this conditional
+	 *
+	 * need_handoff_enable implies this clk was already enabled by
+	 * __clk_init. now we have a proper user, so unset the flag in our
+	 * internal bookkeeping. See CLK_ENABLE_HAND_OFF flag in clk-provider.h
+	 * for details.
+	 */
+	if (clk->core->need_handoff_enable) {
+		clk->core->need_handoff_enable = false;
+		goto out;
+	}
+
+	ret = clk_core_enable(clk->core);
+
+out:
+	clk_enable_unlock(flags);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(clk_enable);
@@ -2505,6 +2537,27 @@ static int __clk_init(struct device *dev, struct clk *clk_user)
 	if (core->flags & CLK_IS_CRITICAL) {
 		clk_core_prepare(core);
 		clk_core_enable(core);
+	}
+
+	/*
+	 * enable clocks with the CLK_ENABLE_HAND_OFF flag set
+	 *
+	 * This flag causes the framework to enable the clock at registration
+	 * time, which is sometimes necessary for clocks that would cause a
+	 * system crash when gated (e.g. cpu, memory, etc). The prepare_count
+	 * is migrated over to the first clk consumer to call clk_prepare().
+	 * Similarly the clk's enable_count is migrated to the first consumer
+	 * to call clk_enable().
+	 */
+	if (core->flags & CLK_ENABLE_HAND_OFF) {
+		core->need_handoff_prepare = true;
+		core->need_handoff_enable = true;
+		ret = clk_core_prepare(core);
+		if (ret)
+			goto out;
+		clk_core_enable(core);
+		if (ret)
+			goto out;
 	}
 
 	kref_init(&core->ref);
