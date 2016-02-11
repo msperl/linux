@@ -33,6 +33,9 @@
 #define CLK_RECALC_NEW_RATES	BIT(9) /* recalc rates after notifications */
 #define CLK_SET_RATE_UNGATE	BIT(10) /* clock needs to run to set rate */
 #define CLK_IS_CRITICAL		BIT(11) /* do not gate, ever */
+#define CLK_ENABLE_HAND_OFF	BIT(12) /* enable clock when registered.
+					   hand-off enable_count & prepare_count
+					   to first consumer that enables clk */
 
 struct clk;
 struct clk_hw;
