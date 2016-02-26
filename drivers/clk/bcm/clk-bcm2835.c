@@ -34,6 +34,7 @@
  * generator).
  */
 
+#include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
 #include <linux/clk/bcm2835.h>
@@ -1226,6 +1227,7 @@ static struct clk *bcm2835_register_clock(struct bcm2835_cprman *cprman,
 	struct clk_init_data init;
 	const char *parents[1 << CM_SRC_BITS];
 	size_t i;
+	struct clk *clk;
 
 	/*
 	 * Replace our "xosc" references with the oscillator's
@@ -1259,7 +1261,18 @@ static struct clk *bcm2835_register_clock(struct bcm2835_cprman *cprman,
 	clock->data = data;
 	clock->hw.init = &init;
 
-	return devm_clk_register(cprman->dev, &clock->hw);
+	clk = devm_clk_register(cprman->dev, &clock->hw);
+	if (IS_ERR_OR_NULL(clk))
+		return clk;
+
+	/* enable/prepare if the clock is enabled by the firmware */
+	if (cprman_read(cprman, data->ctl_reg) & CM_ENABLE) {
+		dev_info(cprman->dev,
+			 "found firmware enabled clock %pC\n", clk);
+		clk_prepare_enable(clk);
+	}
+
+	return clk;
 }
 
 static struct clk *bcm2835_register_gate(struct bcm2835_cprman *cprman,
