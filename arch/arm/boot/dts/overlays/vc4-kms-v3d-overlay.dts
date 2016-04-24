@@ -101,4 +101,11 @@
 			brcm,dma-channel-mask = <0x7f35>;
 		};
 	};
+
+	fragment@6 {
+		target = <&i2s>;
+		__overlay__ {
+			compatible = "brcm,bcm2835-i2s";
+		};
+	};
 };
