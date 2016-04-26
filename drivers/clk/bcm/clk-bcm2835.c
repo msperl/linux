@@ -1200,6 +1200,15 @@ bcm2835_register_pll_divider(struct bcm2835_cprman *cprman,
 	divider->cprman = cprman;
 	divider->data = data;
 
+	/* if the pll-divider is running, then mark is as critical */
+	if ((cprman_read(cprman, data->a2w_reg) &
+	     A2W_PLL_CHANNEL_DISABLE) == 0) {
+		dev_info(cprman->dev,
+			 "found enabled pll_div %s - marking it as critical\n",
+			 data->name);
+		init.flags |= CLK_IS_CRITICAL;
+	}
+
 	clk = devm_clk_register(cprman->dev, &divider->div.hw);
 	if (IS_ERR(clk))
 		return clk;
