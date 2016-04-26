@@ -1251,6 +1251,14 @@ static struct clk *bcm2835_register_clock(struct bcm2835_cprman *cprman,
 		init.flags |= CLK_SET_RATE_GATE | CLK_SET_PARENT_GATE;
 	}
 
+	/* if the clock is running, then enable HANDS_OFF */
+	if (cprman_read(cprman, data->ctl_reg) & CM_ENABLE) {
+		dev_info(cprman->dev,
+			 "found enabled clock %s - enabling hand off\n",
+			 data->name);
+		init.flags |= CLK_ENABLE_HAND_OFF;
+	}
+
 	clock = devm_kzalloc(cprman->dev, sizeof(*clock), GFP_KERNEL);
 	if (!clock)
 		return NULL;
