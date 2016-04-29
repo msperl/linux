@@ -448,6 +448,8 @@ struct bcm2835_clock_data {
 
 	bool is_vpu_clock;
 	bool is_mash_clock;
+
+	u32 enabled_parents;
 };
 
 struct bcm2835_gate_data {
@@ -1027,6 +1029,9 @@ static int bcm2835_clock_determine_rate(struct clk_hw *hw,
 	unsigned long prate, best_prate = 0;
 	size_t i;
 	u32 div;
+	const struct bcm2835_clock_data *data = clock->data;
+	u32 enabled_parents = data->enabled_parents ?
+		data->enabled_parents : U32_MAX;
 
 	/*
 	 * Select parent clock that results in the closest but lower rate
@@ -1034,6 +1039,8 @@ static int bcm2835_clock_determine_rate(struct clk_hw *hw,
 	for (i = 0; i < clk_hw_get_num_parents(hw); ++i) {
 		parent = clk_hw_get_parent_by_index(hw, i);
 		if (!parent)
+			continue;
+		if ((enabled_parents & BIT(i)) == 0)
 			continue;
 		prate = clk_hw_get_rate(parent);
 		div = bcm2835_clock_choose_div(hw, req->rate, prate, true);
@@ -1305,11 +1312,15 @@ struct bcm2835_clk_desc {
 /* parent mux arrays plus helper macros */
 
 /* main oscillator parent mux */
+#define BCM2835_OSC_GND		0
+#define BCM2835_OSC_OSC		1
+#define BCM2835_OSC_TESTDEBUG0	2
+#define BCM2835_OSC_TESTDEBUG1	3
 static const char *const bcm2835_clock_osc_parents[] = {
-	"gnd",
-	"xosc",
-	"testdebug0",
-	"testdebug1"
+	[BCM2835_OSC_GND]		= "gnd",
+	[BCM2835_OSC_OSC]		= "xosc",
+	[BCM2835_OSC_TESTDEBUG0]	= "testdebug0",
+	[BCM2835_OSC_TESTDEBUG1]	= "testdebug1",
 };
 
 #define REGISTER_OSC_CLK(...)	REGISTER_CLK(				\
@@ -1318,15 +1329,24 @@ static const char *const bcm2835_clock_osc_parents[] = {
 	__VA_ARGS__)
 
 /* main peripherial parent mux */
+#define BCM2835_PER_GND		0
+#define BCM2835_PER_OSC		1
+#define BCM2835_PER_TESTDEBUG0	2
+#define BCM2835_PER_TESTDEBUG1	3
+#define BCM2835_PER_PLLA_PER	4
+#define BCM2835_PER_PLLC_PER	5
+#define BCM2835_PER_PLLD_PER	6
+#define BCM2835_PER_PLLH_AUX	7
+
 static const char *const bcm2835_clock_per_parents[] = {
-	"gnd",
-	"xosc",
-	"testdebug0",
-	"testdebug1",
-	"plla_per",
-	"pllc_per",
-	"plld_per",
-	"pllh_aux",
+	[BCM2835_PER_GND]		= "gnd",
+	[BCM2835_PER_OSC]		= "xosc",
+	[BCM2835_PER_TESTDEBUG0]	= "testdebug0",
+	[BCM2835_PER_TESTDEBUG1]	= "testdebug1",
+	[BCM2835_PER_PLLA_PER]		= "plla_per",
+	[BCM2835_PER_PLLC_PER]		= "pllc_per",
+	[BCM2835_PER_PLLD_PER]		= "plld_per",
+	[BCM2835_PER_PLLH_AUX]		= "pllh_aux",
 };
 
 #define REGISTER_PER_CLK(...)	REGISTER_CLK(				\
@@ -1335,19 +1355,28 @@ static const char *const bcm2835_clock_per_parents[] = {
 	__VA_ARGS__)
 
 /* main vpu parent mux */
+#define BCM2835_VPU_GND		0
+#define BCM2835_VPU_OSC		1
+#define BCM2835_VPU_TESTDEBUG0	2
+#define BCM2835_VPU_TESTDEBUG1	3
+#define BCM2835_VPU_PLLA_CORE	4
+#define BCM2835_VPU_PLLC_CORE0	5
+#define BCM2835_VPU_PLLD_CORE	6
+#define BCM2835_VPU_PLLH_AUX	7
+#define BCM2835_VPU_PLLC_CORE1	8
+#define BCM2835_VPU_PLLC_CORE2	9
 static const char *const bcm2835_clock_vpu_parents[] = {
-	"gnd",
-	"xosc",
-	"testdebug0",
-	"testdebug1",
-	"plla_core",
-	"pllc_core0",
-	"plld_core",
-	"pllh_aux",
-	"pllc_core1",
-	"pllc_core2",
+	[BCM2835_VPU_GND]		= "gnd",
+	[BCM2835_VPU_OSC]		= "xosc",
+	[BCM2835_VPU_TESTDEBUG0]	= "testdebug0",
+	[BCM2835_VPU_TESTDEBUG1]	= "testdebug1",
+	[BCM2835_VPU_PLLA_CORE]		= "plla_core",
+	[BCM2835_VPU_PLLC_CORE0]	= "pllc_core0",
+	[BCM2835_VPU_PLLD_CORE]		= "plld_core",
+	[BCM2835_VPU_PLLH_AUX]		= "pllh_aux",
+	[BCM2835_VPU_PLLC_CORE1]	= "pllc_core1",
+	[BCM2835_VPU_PLLC_CORE2]	= "pllc_core2",
 };
-
 #define REGISTER_VPU_CLK(...)	REGISTER_CLK(				\
 	.num_mux_parents = ARRAY_SIZE(bcm2835_clock_vpu_parents),	\
 	.parents = bcm2835_clock_vpu_parents,				\
@@ -1746,6 +1775,9 @@ static const struct bcm2835_clk_desc clk_desc_array[] = {
 		.div_reg = CM_PCMDIV,
 		.int_bits = 12,
 		.frac_bits = 12,
+		.enabled_parents = BIT(BCM2835_PER_GND) |
+				   BIT(BCM2835_PER_OSC) |
+				   BIT(BCM2835_PER_PLLD_PER),
 		.is_mash_clock = true),
 	[BCM2835_CLOCK_PWM]	= REGISTER_PER_CLK(
 		.name = "pwm",
@@ -1753,6 +1785,9 @@ static const struct bcm2835_clk_desc clk_desc_array[] = {
 		.div_reg = CM_PWMDIV,
 		.int_bits = 12,
 		.frac_bits = 12,
+		.enabled_parents = BIT(BCM2835_PER_GND) |
+				   BIT(BCM2835_PER_OSC) |
+				   BIT(BCM2835_PER_PLLD_PER),
 		.is_mash_clock = true),
 	[BCM2835_CLOCK_SLIM]	= REGISTER_PER_CLK(
 		.name = "slim",
