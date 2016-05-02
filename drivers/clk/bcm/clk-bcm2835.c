@@ -448,6 +448,8 @@ struct bcm2835_clock_data {
 
 	bool is_vpu_clock;
 	bool is_mash_clock;
+
+	u32 flags;
 };
 
 struct bcm2835_gate_data {
@@ -1027,6 +1029,11 @@ static int bcm2835_clock_determine_rate(struct clk_hw *hw,
 	unsigned long prate, best_prate = 0;
 	size_t i;
 	u32 div;
+	const struct bcm2835_clock_data *data = clock->data;
+	u32 enabled_parents;
+
+	/* mask the possible parent clocks in the flags */
+	enabled_parents = data->flags & (BIT(data->num_mux_parents) - 1);
 
 	/*
 	 * Select parent clock that results in the closest but lower rate
@@ -1034,6 +1041,8 @@ static int bcm2835_clock_determine_rate(struct clk_hw *hw,
 	for (i = 0; i < clk_hw_get_num_parents(hw); ++i) {
 		parent = clk_hw_get_parent_by_index(hw, i);
 		if (!parent)
+			continue;
+		if ((enabled_parents & BIT(i)) == 0)
 			continue;
 		prate = clk_hw_get_rate(parent);
 		div = bcm2835_clock_choose_div(hw, req->rate, prate, true);
@@ -1134,7 +1143,8 @@ static const struct clk_ops bcm2835_vpu_clock_clk_ops = {
 };
 
 static struct clk *bcm2835_register_pll(struct bcm2835_cprman *cprman,
-					const struct bcm2835_pll_data *data)
+					const struct bcm2835_pll_data *data,
+					int idx)
 {
 	struct bcm2835_pll *pll;
 	struct clk_init_data init;
@@ -1161,7 +1171,8 @@ static struct clk *bcm2835_register_pll(struct bcm2835_cprman *cprman,
 
 static struct clk *
 bcm2835_register_pll_divider(struct bcm2835_cprman *cprman,
-			     const struct bcm2835_pll_divider_data *data)
+			     const struct bcm2835_pll_divider_data *data,
+			     int idx)
 {
 	struct bcm2835_pll_divider *divider;
 	struct clk_init_data init;
@@ -1219,13 +1230,58 @@ bcm2835_register_pll_divider(struct bcm2835_cprman *cprman,
 	return clk;
 }
 
+static void _bcm2835_register_clock_get_of_flags(
+	struct bcm2835_cprman *cprman,
+	struct bcm2835_clock_data *data,
+	u32 idx)
+{
+        struct property *prop;
+	const __be32 *cur;
+	u32 index, flags, curidx = 0;
+	int ret;
+
+	/* set up the default flags */
+	data->flags = BIT(data->num_mux_parents) - 1;
+
+	/* loop all entries to find our index */
+	of_property_for_each_u32(cprman->dev->of_node, "brcm,clock-index",
+				 prop, cur, index) {
+		if (index == idx) {
+			/* ok, so we match, so see if we got flags */
+			ret = of_property_read_u32_index(
+				cprman->dev->of_node, "brcm,clock-flags",
+				curidx, &flags);
+			if (ret) {
+				/* just provide an error message */
+				dev_err(cprman->dev,
+					"%s: did not find a value in bcrm,clock-flags index %d - %d\n",
+					data->name, curidx, ret);
+			} else {
+				/* so we got a match, so apply some checks */
+				dev_dbg(cprman->dev,
+					"%s: got clock-flags %08x\n",
+					 data->name, flags);
+				/* assign and return */
+				data->flags = flags;
+			}
+			/* return */
+			return;
+		}
+		curidx++;
+	}
+}
+
 static struct clk *bcm2835_register_clock(struct bcm2835_cprman *cprman,
-					  const struct bcm2835_clock_data *data)
+					  struct bcm2835_clock_data *data,
+					  int idx)
 {
 	struct bcm2835_clock *clock;
 	struct clk_init_data init;
 	const char *parents[1 << CM_SRC_BITS];
 	size_t i;
+
+	/* set the flags from the dt */
+	_bcm2835_register_clock_get_of_flags(cprman, data, idx);
 
 	/*
 	 * Replace our "xosc" references with the oscillator's
@@ -1280,7 +1336,7 @@ static struct clk *bcm2835_register_gate(struct bcm2835_cprman *cprman,
 }
 
 typedef struct clk *(*bcm2835_clk_register)(struct bcm2835_cprman *cprman,
-					    const void *data);
+					    const void *data, int idx);
 struct bcm2835_clk_desc {
 	bcm2835_clk_register clk_register;
 	const void *data;
@@ -1306,10 +1362,10 @@ struct bcm2835_clk_desc {
 
 /* main oscillator parent mux */
 static const char *const bcm2835_clock_osc_parents[] = {
-	"gnd",
-	"xosc",
-	"testdebug0",
-	"testdebug1"
+	[BCM2835_OSC_PARENT_GND]	= "gnd",
+	[BCM2835_OSC_PARENT_OSC]	= "xosc",
+	[BCM2835_OSC_PARENT_TESTDEBUG0]	= "testdebug0",
+	[BCM2835_OSC_PARENT_TESTDEBUG1]	= "testdebug1",
 };
 
 #define REGISTER_OSC_CLK(...)	REGISTER_CLK(				\
@@ -1319,14 +1375,14 @@ static const char *const bcm2835_clock_osc_parents[] = {
 
 /* main peripherial parent mux */
 static const char *const bcm2835_clock_per_parents[] = {
-	"gnd",
-	"xosc",
-	"testdebug0",
-	"testdebug1",
-	"plla_per",
-	"pllc_per",
-	"plld_per",
-	"pllh_aux",
+	[BCM2835_PER_PARENT_GND]	= "gnd",
+	[BCM2835_PER_PARENT_OSC]	= "xosc",
+	[BCM2835_PER_PARENT_TESTDEBUG0]	= "testdebug0",
+	[BCM2835_PER_PARENT_TESTDEBUG1]	= "testdebug1",
+	[BCM2835_PER_PARENT_PLLA_PER]	= "plla_per",
+	[BCM2835_PER_PARENT_PLLC_PER]	= "pllc_per",
+	[BCM2835_PER_PARENT_PLLD_PER]	= "plld_per",
+	[BCM2835_PER_PARENT_PLLH_AUX]	= "pllh_aux",
 };
 
 #define REGISTER_PER_CLK(...)	REGISTER_CLK(				\
@@ -1336,18 +1392,17 @@ static const char *const bcm2835_clock_per_parents[] = {
 
 /* main vpu parent mux */
 static const char *const bcm2835_clock_vpu_parents[] = {
-	"gnd",
-	"xosc",
-	"testdebug0",
-	"testdebug1",
-	"plla_core",
-	"pllc_core0",
-	"plld_core",
-	"pllh_aux",
-	"pllc_core1",
-	"pllc_core2",
+	[BCM2835_VPU_PARENT_GND]	= "gnd",
+	[BCM2835_VPU_PARENT_OSC]	= "xosc",
+	[BCM2835_VPU_PARENT_TESTDEBUG0]	= "testdebug0",
+	[BCM2835_VPU_PARENT_TESTDEBUG1]	= "testdebug1",
+	[BCM2835_VPU_PARENT_PLLA_CORE]	= "plla_core",
+	[BCM2835_VPU_PARENT_PLLC_CORE0]	= "pllc_core0",
+	[BCM2835_VPU_PARENT_PLLD_CORE]	= "plld_core",
+	[BCM2835_VPU_PARENT_PLLH_AUX]	= "pllh_aux",
+	[BCM2835_VPU_PARENT_PLLC_CORE1]	= "pllc_core1",
+	[BCM2835_VPU_PARENT_PLLC_CORE2]	= "pllc_core2",
 };
-
 #define REGISTER_VPU_CLK(...)	REGISTER_CLK(				\
 	.num_mux_parents = ARRAY_SIZE(bcm2835_clock_vpu_parents),	\
 	.parents = bcm2835_clock_vpu_parents,				\
@@ -1357,7 +1412,7 @@ static const char *const bcm2835_clock_vpu_parents[] = {
  * the real definition of all the pll, pll_dividers and clocks
  * these make use of the above REGISTER_* macros
  */
-static const struct bcm2835_clk_desc clk_desc_array[] = {
+static struct bcm2835_clk_desc clk_desc_array[] = {
 	/* the PLL + PLL dividers */
 
 	/*
@@ -1846,7 +1901,7 @@ static int bcm2835_clk_probe(struct platform_device *pdev)
 	for (i = 0; i < asize; i++) {
 		desc = &clk_desc_array[i];
 		if (desc->clk_register && desc->data)
-			clks[i] = desc->clk_register(cprman, desc->data);
+			clks[i] = desc->clk_register(cprman, desc->data, i);
 	}
 
 	return of_clk_add_provider(dev->of_node, of_clk_src_onecell_get,
