@@ -89,6 +89,8 @@
 			 * oscillator.
 			 */
 			clocks = <&clk_osc>;
+			brcm,clock-flags = <((1 << BCM2835_PER_PARENT_OSC) | (1 << BCM2835_PER_PARENT_PLLD_PER))>;
+			brcm,clock-index = <BCM2835_CLOCK_PCM>;
 		};
 
 		random: rng@7e104000 {
