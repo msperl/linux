@@ -954,6 +954,14 @@ Params: oscillator              Clock frequency for the CAN controller (Hz)
 
         interrupt               GPIO for interrupt signal
 
+Name:   mcp2517fd-can0
+Info:   Configures the MCP2517fd CAN controller on spi0.0
+Load:   dtoverlay=mcp2517fd-can0,<param>=<val>
+Params: oscillator              Clock frequency for the CAN controller (Hz)
+
+        spimaxfrequency         Maximum SPI frequence (Hz)
+
+        interrupt               GPIO for interrupt signal
 
 Name:   mcp3008
 Info:   Configures MCP3008 A/D converters

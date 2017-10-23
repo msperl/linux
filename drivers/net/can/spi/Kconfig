@@ -7,4 +7,10 @@ config CAN_MCP251X
 	---help---
 	  Driver for the Microchip MCP251x SPI CAN controllers.
 
+config CAN_MCP2517FD
+	tristate "Microchip MCP2517FD SPI CAN controllers"
+	depends on HAS_DMA
+	---help---
+	  Driver for the Microchip MCP2517FD SPI CAN controllers.
+
 endmenu
