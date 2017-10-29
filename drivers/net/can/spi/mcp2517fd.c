@@ -514,6 +514,77 @@
 #  define CAN_FILMASK_MSID11		BIT(29)
 #  define CAN_FILMASK_MIDE		BIT(30)
 
+#define CAN_OBJ_ID_SID_BITS		11
+#define CAN_OBJ_ID_SID_SHIFT		0
+#define CAN_OBJ_ID_SID_MASK				\
+	GENMASK(CAN_ID_SID_SHIFT + CAN_ID_SID_BITS - 1, \
+		CAN_ID_SID_SHIFT)
+#define CAN_OBJ_ID_EID_BITS		18
+#define CAN_OBJ_ID_EID_SHIFT		11
+#define CAN_OBJ_ID_EID_MASK				\
+	GENMASK(CAN_ID_EID_SHIFT + CAN_ID_EID_BITS - 1, \
+		CAN_ID_EID_SHIFT)
+#define CAN_OBJ_ID_SID_BIT11		BIT(29)
+
+#define CAN_OBJ_FLAGS_DLC_BITS		4
+#define CAN_OBJ_FLAGS_DLC_SHIFT		0
+#define CAN_OBJ_FLAGS_DLC_MASK				      \
+	GENMASK(CAN_FLAGS_DLC_SHIFT + CAN_FLAGS_DLC_BITS - 1, \
+		CAN_FLAGS_DLC_SHIFT)
+#define CAN_OBJ_FLAGS_IDE		BIT(4)
+#define CAN_OBJ_FLAGS_RTR		BIT(5)
+#define CAN_OBJ_FLAGS_BRS		BIT(6)
+#define CAN_OBJ_FLAGS_FDF		BIT(7)
+#define CAN_OBJ_FLAGS_ESI		BIT(8)
+#define CAN_OBJ_FLAGS_SEQ_BITS		7
+#define CAN_OBJ_FLAGS_SEQ_SHIFT		9
+#define CAN_OBJ_FLAGS_SEQ_MASK				      \
+	GENMASK(CAN_FLAGS_SEQ_SHIFT + CAN_FLAGS_SEQ_BITS - 1, \
+		CAN_FLAGS_SEQ_SHIFT)
+#define CAN_OBJ_FLAGS_FILHIT_BITS	11
+#define CAN_OBJ_FLAGS_FILHIT_SHIFT	5
+#define CAN_OBJ_FLAGS_FILHIT_MASK				      \
+	GENMASK(CAN_FLAGS_SEQ_SHIFT + CAN_FLAGS_SEQ_BITS - 1, \
+		CAN_FLAGS_SEQ_SHIFT)
+
+struct mcp2517fd_obj_tef {
+	u32 id;
+	u32 flags;
+	u32 ts;
+};
+
+struct mcp2517fd_obj_tx {
+	u32 id;
+	u32 flags;
+	u32 data[];
+};
+
+struct mcp2517fd_obj_rx {
+	u32 id;
+	u32 flags;
+	u32 ts;
+	u8 data[];
+};
+
+/* the prepared transmit spi message */
+struct mcp2517_fd_obj_tx_msg {
+	int skb_idx;
+	unsigned int min_length;
+	struct {
+		struct spi_message msg;
+		struct spi_transfer xfer;
+		u16 cmd_addr;
+		u8 obj[sizeof(struct mcp2517fd_obj_tx)];
+		u8 payload[64];
+	} data;
+	struct {
+		struct spi_message msg;
+		struct spi_transfer xfer;
+		u16 cmd_addr;
+		u8 data;
+	} trigger;
+};
+
 #define FIFO_DATA(x)			(0x400 + (x))
 #define FIFO_DATA_SIZE			0x800
 
@@ -580,19 +651,19 @@ struct mcp2517fd_priv {
 
 	int payload_size;
 	u8 payload_mode;
-	u8 rx_fifos;
+
 	u8 tx_fifos;
-
-	u32 tx_address[32];
-
-	u32 rx_address_start;
-	u32 rx_address_inc;
-	u32 rx_address_end;
-	u32 rx_address;
+	struct mcp2517_fd_obj_tx_msg tx_msg[32];
 
 	u32 tef_address_start;
 	u32 tef_address_end;
 	u32 tef_address;
+
+	u8 rx_fifos;
+	u32 rx_address_start;
+	u32 rx_address_inc;
+	u32 rx_address_end;
+	u32 rx_address;
 
 	int force_quit;
 	int after_suspend;
@@ -606,61 +677,14 @@ struct mcp2517fd_priv {
 	struct clk *clk;
 };
 
-#define CAN_OBJ_ID_SID_BITS		11
-#define CAN_OBJ_ID_SID_SHIFT		0
-#define CAN_OBJ_ID_SID_MASK				\
-	GENMASK(CAN_ID_SID_SHIFT + CAN_ID_SID_BITS - 1, \
-		CAN_ID_SID_SHIFT)
-#define CAN_OBJ_ID_EID_BITS		18
-#define CAN_OBJ_ID_EID_SHIFT		11
-#define CAN_OBJ_ID_EID_MASK				\
-	GENMASK(CAN_ID_EID_SHIFT + CAN_ID_EID_BITS - 1, \
-		CAN_ID_EID_SHIFT)
-#define CAN_OBJ_ID_SID_BIT11		BIT(29)
-
-#define CAN_OBJ_FLAGS_DLC_BITS		4
-#define CAN_OBJ_FLAGS_DLC_SHIFT		0
-#define CAN_OBJ_FLAGS_DLC_MASK				      \
-	GENMASK(CAN_FLAGS_DLC_SHIFT + CAN_FLAGS_DLC_BITS - 1, \
-		CAN_FLAGS_DLC_SHIFT)
-#define CAN_OBJ_FLAGS_IDE		BIT(4)
-#define CAN_OBJ_FLAGS_RTR		BIT(5)
-#define CAN_OBJ_FLAGS_BRS		BIT(6)
-#define CAN_OBJ_FLAGS_FDF		BIT(7)
-#define CAN_OBJ_FLAGS_ESI		BIT(8)
-#define CAN_OBJ_FLAGS_SEQ_BITS		7
-#define CAN_OBJ_FLAGS_SEQ_SHIFT		9
-#define CAN_OBJ_FLAGS_SEQ_MASK				      \
-	GENMASK(CAN_FLAGS_SEQ_SHIFT + CAN_FLAGS_SEQ_BITS - 1, \
-		CAN_FLAGS_SEQ_SHIFT)
-#define CAN_OBJ_FLAGS_FILHIT_BITS	11
-#define CAN_OBJ_FLAGS_FILHIT_SHIFT	5
-#define CAN_OBJ_FLAGS_FILHIT_MASK				      \
-	GENMASK(CAN_FLAGS_SEQ_SHIFT + CAN_FLAGS_SEQ_BITS - 1, \
-		CAN_FLAGS_SEQ_SHIFT)
-
-struct mcp2517fd_obj_tef {
-	u32 id;
-	u32 flags;
-	u32 ts;
-};
-
-struct mcp2517fd_obj_tx {
-	u32 id;
-	u32 flags;
-	u32 data[];
-};
-
-struct mcp2517fd_obj_rx {
-	u32 id;
-	u32 flags;
-	u32 ts;
-	u32 data[];
-};
+static u16 mcp2517fd_calc_cmd_addr(u16 cmd, u16 addr)
+{
+	return cpu_to_be16(cmd | (addr & ADDRESS_MASK));
+}
 
 static int mcp2517fd_cmd_reset(struct spi_device *spi)
 {
-	u16 tx_buf = cpu_to_be16(INSTRUCTION_RESET);
+	u16 tx_buf = mcp2517fd_calc_cmd_addr(INSTRUCTION_RESET, 0);
 
 	/* write the reset command */
 	return spi_write(spi, &tx_buf, 2);
@@ -669,7 +693,7 @@ static int mcp2517fd_cmd_reset(struct spi_device *spi)
 static int mcp2517fd_cmd_readle32(struct spi_device *spi, u32 reg, u32 *data)
 {
 
-	u16 tx_buf = cpu_to_be16(INSTRUCTION_READ | (reg & ADDRESS_MASK));
+	u16 tx_buf = mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg);
 	u32 rx_buf = 0;
 	int ret;
 
@@ -693,8 +717,7 @@ static int mcp2517fd_cmd_writele32(struct spi_device *spi, u32 reg, u32 val)
 		 "writele32 0x%03x =\t0x%08x\n", reg, val);
 
 	/* fill the buffer */
-	*((u16 *)tx_buf) =
-		cpu_to_be16(INSTRUCTION_WRITE | (reg & ADDRESS_MASK));
+	*((u16 *)tx_buf) = mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE, reg);
 	*(u32 *)&tx_buf[2] = cpu_to_le32(val);
 
 	/* read the register */
@@ -708,6 +731,14 @@ static int mcp2517fd_cmd_writele32(struct spi_device *spi, u32 reg, u32 val)
 	return ret;
 }
 
+static int mcp2517fd_cmd_readb(struct spi_device *spi, u32 reg, u8 *data)
+{
+	u16 tx_buf = mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg);
+
+	/* read the register */
+	return spi_write_then_read(spi, &tx_buf, 2, data, 1);
+}
+
 static int mcp2517fd_cmd_writeb(struct spi_device *spi, u32 reg, u8 val)
 {
 	u8 tx_buf[3];
@@ -716,21 +747,11 @@ static int mcp2517fd_cmd_writeb(struct spi_device *spi, u32 reg, u8 val)
 		 "writeb 0x%03x = 0x%02x\n", reg, val);
 
 	/* fill the buffer */
-	*((u16 *)tx_buf) =
-		cpu_to_be16(INSTRUCTION_WRITE | (reg & ADDRESS_MASK));
+	*((u16 *)tx_buf) = mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE, reg);
 	tx_buf[2] = val;
 
 	/* read the register */
 	return spi_write(spi, &tx_buf, 3);
-}
-
-static int mcp2517fd_cmd_readb(struct spi_device *spi, u32 reg, u8 *data)
-{
-
-	u16 tx_buf = cpu_to_be16(INSTRUCTION_READ | (reg & ADDRESS_MASK));
-
-	/* read the register */
-	return spi_write_then_read(spi, &tx_buf, 2, data, 1);
 }
 
 static void dump_reg(struct spi_device *spi)
@@ -746,38 +767,40 @@ static void dump_reg(struct spi_device *spi)
 
 static void mcp2517fd_transmit_message(struct spi_device *spi)
 {
+	unsigned int id = 0;
+	unsigned int len = 6;
+	u32 addr = 0x155;
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517_fd_obj_tx_msg * msg = &priv->tx_msg[id];
+	struct mcp2517fd_obj_tx obj;
+	u32 data[16];
 	int ret;
-	int i;
-	u32 val, val2, val3;
 
-	dump_reg(spi);
-
-	/* transmit message in FIFO 0 */
-	mcp2517fd_cmd_writele32(spi, priv->tx_address[0], 0x155);
-	mcp2517fd_cmd_writele32(spi, priv->tx_address[0] + 4, 4);
-	mcp2517fd_cmd_writele32(spi, priv->tx_address[0] + 8, 0x44332211);
-	mcp2517fd_cmd_writele32(spi, priv->tx_address[0] + 12, 0x88776655);
-
-		ret = mcp2517fd_cmd_writeb(spi,
-				   CAN_FIFOCON(TX_FIFO(0)) + 1,
-				   (CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC) >> 8);
-
-	/* read the status several times */
-	for(i=0; i< 16; i++) {
-		/* read status */
-		mcp2517fd_cmd_readle32(spi,CAN_CON, &val);
-		dev_err(&spi->dev, "CAN_CON: %08x\n", val);
-		/* done */
-		mcp2517fd_cmd_readle32(spi,CAN_FIFOCON(TX_FIFO(0)), &val);
-		mcp2517fd_cmd_readle32(spi,CAN_FIFOSTA(TX_FIFO(0)), &val2);
-		mcp2517fd_cmd_readle32(spi,CAN_TXREQ, &val3);
-		dev_err(&spi->dev, "FIFO: 0x%08x - 0x%08x - 0x%08x\n",
-			val, val2, val3);
+	if (len > 8) {
+		return;
 	}
 
-	dump_reg(spi);
+	/* set the variables - aligned */
+	obj.id = cpu_to_le32(addr);
+	obj.flags = cpu_to_le32((len << CAN_OBJ_FLAGS_DLC_SHIFT) |
+			  (id << CAN_OBJ_FLAGS_SEQ_SHIFT));
+	data[0] = cpu_to_le32(0x44332211);
+	data[1] = cpu_to_le32(0x88776655);
+	/* copy data to non-aligned - without leaking... */
+	memset(msg->data.payload, 0, sizeof(*msg->data.payload));
+	memcpy(msg->data.obj, &obj, sizeof(obj));
+	memcpy(msg->data.payload, data, sizeof(data));
 
+	/* transfers to FIFO RAM have to be multiple of 4 */
+	msg->data.xfer.len = msg->min_length + ALIGN(len, 4);
+
+	/* and submit async transfers - 2 work quicker than 1 surprizingly */
+	ret = spi_async(spi, &msg->data.msg);
+	dev_err(&spi->dev," spi_async: %i", ret);
+	ret = spi_async(spi, &msg->trigger.msg);
+	dev_err(&spi->dev," spi_async: %i", ret);
+
+//	mdelay(3000);
 }
 
 
@@ -840,6 +863,12 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 		| ((bt->brp) << CAN_DBTCFG_BRP_SHIFT);
 
 	return mcp2517fd_cmd_writele32(spi, CAN_DBTCFG, val);
+}
+
+static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
+					struct net_device *net)
+{
+	return -ENOMEM;
 }
 
 static void mcp2517fd_open_clean(struct net_device *net)
@@ -985,7 +1014,7 @@ static int mcp2517fd_set_normal_mode(struct spi_device *spi)
 		return ret;
 
 	/* switch spi speed to "normal" */
-	//spi->max_speed_hz = priv->spi_normal_speed_hz;
+	spi->max_speed_hz = priv->spi_normal_speed_hz;
 	ret = spi_setup(spi);
 	if (ret)
 		return ret;
@@ -1064,6 +1093,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				struct spi_device *spi)
 {
 	u32 con_val = priv->con_val;
+	struct mcp2517_fd_obj_tx_msg *msg;
 	u32 val;
 	int ret;
 	int i;
@@ -1157,19 +1187,45 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 					    &val);
 		if (ret)
 			return ret;
-		priv->tx_address[i] = 0x400 + val;
+		/* normalize val to RAM address */
+		val = FIFO_DATA(val);
+		/* assign as rx_address_end - we go top to buttom, so its ok */
+		priv->rx_address_end = val;
+
+		/* clear tx messages */
+		msg = &priv->tx_msg[i];
+		memset(msg, 0, sizeof(msg));
+		/* prepare the spi messages to submit to fifo */
+		spi_message_init_with_transfers(
+			&msg->data.msg, &msg->data.xfer, 1);
+		msg->data.xfer.tx_buf = &msg->data.cmd_addr;
+		msg->min_length = sizeof(msg->data.cmd_addr) +
+			sizeof(msg->data.obj);
+		msg->data.cmd_addr = mcp2517fd_calc_cmd_addr(
+			INSTRUCTION_WRITE, val);
+		/* and the trigger */
+		spi_message_init_with_transfers(
+			&msg->trigger.msg, &msg->trigger.xfer, 1);
+		msg->trigger.xfer.tx_buf = &msg->trigger.cmd_addr;
+		msg->trigger.xfer.len = 3;
+		msg->trigger.cmd_addr = mcp2517fd_calc_cmd_addr(
+			INSTRUCTION_WRITE, CAN_FIFOCON(TX_FIFO(i)) + 1);
+		msg->trigger.data =
+			(CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC) >> 8;
+
 		dev_err(&spi->dev," TX-FIFO%02i: %04x\n",
-			i, priv->tx_address[i]);
+			i, val);
 	}
 
 	/* for the rx fifo */
-	ret = mcp2517fd_cmd_readle32(spi, CAN_FIFOUA(1), &val);
+	ret = mcp2517fd_cmd_readle32(spi, CAN_FIFOUA(RX_FIFO), &val);
 	if (ret)
 		return ret;
-	priv->rx_address_start = 0x400 + val;
-	priv->rx_address = 0x400 + val;
-	priv->rx_address_end = priv->tx_address[0];
-	dev_err(&spi->dev," RX-FIFO: %04x\n", priv->rx_address);
+	val = FIFO_DATA(val);
+	priv->rx_address_start = val;
+	priv->rx_address = val;
+	dev_err(&spi->dev," RX-FIFO: %03x - %03x\n",
+		priv->rx_address, priv->rx_address_end);
 
 	/* for the TEF fifo */
 	ret = mcp2517fd_cmd_readle32(spi, CAN_TEFUA, &val);
@@ -1178,7 +1234,8 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	priv->tef_address_start = 0x400 + val;
 	priv->tef_address = 0x400 + val;
 	priv->tef_address_end = priv->rx_address_start;
-	dev_err(&spi->dev," TEF-FIFO: %04x\n", priv->tef_address);
+	dev_err(&spi->dev," TEF-FIFO: %03x - %03x\n",
+		priv->tef_address, priv->tef_address_end);
 
 	/* now get back into config mode */
 	ret = mcp2517fd_cmd_writele32(
@@ -1421,7 +1478,7 @@ static int mcp2517fd_stop(struct net_device *net)
 static const struct net_device_ops mcp2517fd_netdev_ops = {
 	.ndo_open = mcp2517fd_open,
 	.ndo_stop = mcp2517fd_stop,
-//	.ndo_start_xmit = mcp2517fd_hard_start_xmit,
+	.ndo_start_xmit = mcp2517fd_start_xmit,
 	.ndo_change_mtu = can_change_mtu,
 };
 
