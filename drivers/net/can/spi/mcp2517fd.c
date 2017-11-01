@@ -480,13 +480,13 @@
 	GENMASK(CAN_FIFOSTA_FIFOCI_SHIFT + CAN_FIFOSTA_FIFOCI_BITS - 1, \
 		CAN_FIFOSTA_FIFOCI_SHIFT)
 #define CAN_FIFOUA(x)			CAN_SFR_BASE(0x64 + 12 * (x - 1))
-#define CAN_FLTCON_BYTE(x)		CAN_SFR_BASE(0x1D0 + x)
-#  define CAN_FILCON_BYTE_SHIFT(x)	0
-#  define CAN_FILCON_BYTE_BITS(x)	4
-#  define CAN_FILCON_BYTE_MASK(x)					\
-	GENMASK(CAN_FILCON_BYTE_SHIFT(x) + CAN_FILCON_BYTE_BITS(x) - 1,	\
-		CAN_FILCON_BYTE_SHIFT(x))
-#  define CAN_FIFOCON_FLTEN(x)		BIT(7)
+#define CAN_FLTCON(x)			CAN_SFR_BASE(0x1D0 + (x >> 2))
+#  define CAN_FILCON_SHIFT(x)		((x & 3) * 8)
+#  define CAN_FILCON_BITS(x)		4
+#  define CAN_FILCON_MASK(x)					\
+	GENMASK(CAN_FILCON_SHIFT(x) + CAN_FILCON_BITS(x) - 1,	\
+		CAN_FILCON_SHIFT(x))
+#  define CAN_FIFOCON_FLTEN(x)		BIT(7 + CAN_FILCON_SHIFT(x))
 #define CAN_FLTOBJ(x)			CAN_SFR_BASE(0x1F0 + 8 * x)
 #  define CAN_FILOBJ_SID_BITS		11
 #  define CAN_FILOBJ_SID_SHIFT		0
@@ -680,81 +680,102 @@ struct mcp2517fd_priv {
 	struct clk *clk;
 };
 
-static u16 mcp2517fd_calc_cmd_addr(u16 cmd, u16 addr)
+static void mcp2517fd_calc_cmd_addr(u16 cmd, u16 addr, u8 *data)
 {
-	return cpu_to_be16(cmd | (addr & ADDRESS_MASK));
+	cmd = cmd | (addr & ADDRESS_MASK);
+
+	data[0] = (cmd >> 8) & 0xff;
+	data[1] = (cmd >> 0) & 0xff;
 }
 
 static int mcp2517fd_cmd_reset(struct spi_device *spi)
 {
-	u16 tx_buf = mcp2517fd_calc_cmd_addr(INSTRUCTION_RESET, 0);
+	u8 tx_buf[2];
+
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_RESET, 0, tx_buf);
 
 	/* write the reset command */
 	return spi_write(spi, &tx_buf, 2);
 }
 
-static int mcp2517fd_cmd_readle32(struct spi_device *spi, u32 reg, u32 *data)
+/* read a register, but we are only interrested in a few bytes */
+static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
+				   u32 *data, u32 mask)
 {
-
-	u16 tx_buf = mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg);
-	u32 rx_buf = 0;
+	int first_byte, last_byte, len_byte;
 	int ret;
+	u8 cmd[2];
 
-	/* read the register */
-	ret = spi_write_then_read(spi, &tx_buf, 2, &rx_buf, 4);
+	/* check that at least one bit is set */
+	if (! mask)
+		return -EINVAL;
+
+	/* calculate first and last byte used */
+	first_byte = (ffs(mask) - 1)  >> 3;
+	last_byte = (fls(mask) - 1)  >> 3;
+	len_byte = last_byte - first_byte +1;
+
+	/* prepare command */
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg + first_byte, cmd);
+
+	/* now execute the command */
+	*data = 0;
+	ret = spi_write_then_read(spi,
+				  &cmd, 2,
+				  data + first_byte,
+				  last_byte - first_byte +1);
 	if (ret)
 		return ret;
 
-	/* transform to cpu order and return */
-	*data = le32_to_cpup(&rx_buf);
+	/* convert it to correct cpu ordering */
+	*data = le32_to_cpu(*data);
+
+	dev_err(&spi->dev, "read_mask: %02x%02x = 0x%08x\n",
+		cmd[0],cmd[1], *data);
+	dev_err(&spi->dev, "\t\tmask: %08x [%i - %i] %i\n",
+		mask, first_byte, last_byte, len_byte);
 
 	return 0;
 }
 
-static int mcp2517fd_cmd_writele32(struct spi_device *spi, u32 reg, u32 val)
+static int mcp2517fd_cmd_read(struct spi_device *spi, u32 reg, u32 *data)
 {
-	u8 tx_buf[6];
-	int ret;
-
-	dev_err(&spi->dev,
-		 "writele32 0x%03x =\t0x%08x\n", reg, val);
-
-	/* fill the buffer */
-	*((u16 *)tx_buf) = mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE, reg);
-	*(u32 *)&tx_buf[2] = cpu_to_le32(val);
-
-	/* read the register */
-	ret = spi_write(spi, &tx_buf, 6);
-	if (ret)
-		return ret;
-
-	ret = mcp2517fd_cmd_readle32(spi, reg, &val);
-	dev_err(&spi->dev,
-		"\tread:\t\t0x%08x\n", val);
-	return ret;
+	return mcp2517fd_cmd_read_mask(spi, reg, data, -1);
 }
 
-static int mcp2517fd_cmd_readb(struct spi_device *spi, u32 reg, u8 *data)
+/* read a register, but we are only interrested in a few bytes */
+static int mcp2517fd_cmd_write_mask(struct spi_device *spi, u32 reg,
+				    u32 data, u32 mask)
 {
-	u16 tx_buf = mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg);
+	int first_byte, last_byte, len_byte;
+	u8 txdata[6];
 
-	/* read the register */
-	return spi_write_then_read(spi, &tx_buf, 2, data, 1);
+	/* check that at least one bit is set */
+	if (! mask)
+		return -EINVAL;
+
+	/* calculate first and last byte used */
+	first_byte = (ffs(mask) - 1)  >> 3;
+	last_byte = (fls(mask) - 1)  >> 3;
+	len_byte = last_byte - first_byte + 1;
+
+	/* prepare buffer */
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE, reg + first_byte, txdata);
+	data = cpu_to_le32(data);
+	memcpy(txdata + 2, &data + first_byte, len_byte);
+
+	dev_err(&spi->dev, "write_mask 0x%02x%02x = 0x%08x\n",
+		txdata[0],txdata[1], data);
+	dev_err(&spi->dev, "\t\tmask: %08x [%i - %i] %i\n",
+		mask, first_byte, last_byte, len_byte);
+
+	/* now execute the command */
+	return spi_write(spi, txdata, len_byte + 2);
 }
 
-static int mcp2517fd_cmd_writeb(struct spi_device *spi, u32 reg, u8 val)
+static int mcp2517fd_cmd_write(struct spi_device *spi, u32 reg, u32 data)
 {
-	u8 tx_buf[3];
-
-	dev_err(&spi->dev,
-		 "writeb 0x%03x = 0x%02x\n", reg, val);
-
-	/* fill the buffer */
-	*((u16 *)tx_buf) = mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE, reg);
-	tx_buf[2] = val;
-
-	/* read the register */
-	return spi_write(spi, &tx_buf, 3);
+	return mcp2517fd_cmd_write_mask(spi, reg, data, -1);
 }
 
 static void dump_reg(struct spi_device *spi)
@@ -762,7 +783,7 @@ static void dump_reg(struct spi_device *spi)
 	int i;
 	u32 val;
 	for (i=0; i < 4096; i += 4) {
-		mcp2517fd_cmd_readle32(spi,i, &val);
+		mcp2517fd_cmd_read(spi,i, &val);
 		if (val)
 			dev_err(&spi->dev, "  REG %03x = %08x\n", i, val);
 	}
@@ -910,7 +931,7 @@ static int mcp2517fd_do_set_nominal_bittiming(struct net_device *net)
 		   << CAN_NBTCFG_TSEG1_SHIFT)
 		| ((bt->brp) << CAN_NBTCFG_BRP_SHIFT);
 
-	return mcp2517fd_cmd_writele32(spi, CAN_NBTCFG, val);
+	return mcp2517fd_cmd_write(spi, CAN_NBTCFG, val);
 }
 
 static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
@@ -926,7 +947,7 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 		   << CAN_DBTCFG_TSEG1_SHIFT)
 		| ((bt->brp) << CAN_DBTCFG_BRP_SHIFT);
 
-	return mcp2517fd_cmd_writele32(spi, CAN_DBTCFG, val);
+	return mcp2517fd_cmd_write(spi, CAN_DBTCFG, val);
 }
 
 static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
@@ -1009,7 +1030,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	mdelay(MCP2517FD_OST_DELAY_MS);
 
 	/* check clock register that the clock is ready or disabled */
-	ret = mcp2517fd_cmd_readle32(spi, MCP2517FD_OSC, &val);
+	ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC, &val);
 	if (ret)
 		return ret;
 
@@ -1021,7 +1042,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 		break;
 	case MCP2517FD_OSC_OSCDIS: /* or the clock is disabled */
 		/* setup clock with defaults - only CLOCKDIV 10 */
-		ret = mcp2517fd_cmd_writele32(
+		ret = mcp2517fd_cmd_write(
 			spi, MCP2517FD_OSC,
 			MCP2517FD_OSC_CLKODIV_10
 			<< MCP2517FD_OSC_CLKODIV_SHIFT);
@@ -1051,7 +1072,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	/* check if we are in config mode already*/
 
 	/* read CON register and match */
-	ret = mcp2517fd_cmd_readle32(spi, CAN_CON, &val);
+	ret = mcp2517fd_cmd_read(spi, CAN_CON, &val);
 	if (ret)
 		return ret;
 	dev_dbg(&spi->dev, "CAN_CON 0x%08x\n",val);
@@ -1072,7 +1093,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	 */
 
 	/* blindly force it into config mode */
-	ret = mcp2517fd_cmd_writele32(spi, CAN_CON, CAN_CON_DEFAULT);
+	ret = mcp2517fd_cmd_write(spi, CAN_CON, CAN_CON_DEFAULT);
 	if (ret)
 		return ret;
 
@@ -1086,7 +1107,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	mdelay(MCP2517FD_OST_DELAY_MS);
 
 	/* read CON register and match a final time */
-	ret = mcp2517fd_cmd_readle32(spi, CAN_CON, &val);
+	ret = mcp2517fd_cmd_read(spi, CAN_CON, &val);
 	if (ret)
 		return ret;
 	dev_dbg(&spi->dev, "CAN_CON 0x%08x\n",val);
@@ -1112,7 +1133,7 @@ static int mcp2517fd_set_normal_mode(struct spi_device *spi)
 		type = CAN_CON_MODE_CAN2_0;
 
 	/* set mode to normal */
-	ret = mcp2517fd_cmd_writele32(spi, CAN_CON,
+	ret = mcp2517fd_cmd_write(spi, CAN_CON,
 				     priv->con_val
 				     | (type << CAN_CON_REQOP_SHIFT));
 	if (ret)
@@ -1170,14 +1191,14 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 	}
 
 	/* write clock */
-	ret = mcp2517fd_cmd_writele32(spi, MCP2517FD_OSC, val);
+	ret = mcp2517fd_cmd_write(spi, MCP2517FD_OSC, val);
 	if (ret)
 		return ret;
 
 	/* wait for synced pll/osc/sclk */
 	timeout = jiffies + MCP2517FD_OSC_POLLING_JIFFIES;
 	while(jiffies <= timeout) {
-		ret = mcp2517fd_cmd_readle32(spi, MCP2517FD_OSC, &val);
+		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC, &val);
 		if (ret)
 			return ret;
 		dev_err(&spi->dev,
@@ -1187,7 +1208,7 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 	}
 
 	dev_err(&spi->dev,
-		"Clock lock did not within the timeout period\n");
+		"Clock did not lock within the timeout period\n");
 
 	/* we timed out */
 	return -ENODEV;
@@ -1224,7 +1245,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* set up TEF SIZE to the number of tx_fifos */
-	ret = mcp2517fd_cmd_writele32(
+	ret = mcp2517fd_cmd_write(
 		spi, CAN_TEFCON,
 		CAN_TEFCON_TEFTSEN |
 		((priv->tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT));
@@ -1232,7 +1253,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		return ret;
 
 	/* now set up RX FIFO */
-	ret = mcp2517fd_cmd_writele32(
+	ret = mcp2517fd_cmd_write(
 		spi, CAN_FIFOCON(RX_FIFO),
 		(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
 		((priv->rx_fifos - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
@@ -1247,28 +1268,28 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 
 	/* clear all filter */
 	for (i = 0; i < 32; i++) {
-		ret = mcp2517fd_cmd_writele32(spi, CAN_FLTOBJ(i), 0);
+		ret = mcp2517fd_cmd_write(spi, CAN_FLTOBJ(i), 0);
 		if (ret)
 			return ret;
-		ret = mcp2517fd_cmd_writele32(spi, CAN_FLTMASK(i), 0);
+		ret = mcp2517fd_cmd_write(spi, CAN_FLTMASK(i), 0);
 		if (ret)
 			return ret;
-		ret = mcp2517fd_cmd_writeb(spi, CAN_FLTCON_BYTE(i), 0);
+		ret = mcp2517fd_cmd_write(spi, CAN_FLTCON(i), 0);
 		if (ret)
 			return ret;
 	}
 
-
 	/* and the RX filter that is required */
-	ret = mcp2517fd_cmd_writeb(spi, CAN_FLTCON_BYTE(0),
-				  CAN_FIFOCON_FLTEN(0) |
-				  (1 << CAN_FILCON_BYTE_SHIFT(x)));
+	ret = mcp2517fd_cmd_write_mask(
+		spi, CAN_FLTCON(0),
+		CAN_FIFOCON_FLTEN(0) | (1 << CAN_FILCON_SHIFT(0)),
+		CAN_FILCON_MASK(0) | CAN_FIFOCON_FLTEN(0));
 	if (ret)
 		return ret;
 
 	/* now setup the TX FIFOS */
 	for (i = 0; i < priv->tx_fifos; i++) {
-		ret = mcp2517fd_cmd_writele32(
+		ret = mcp2517fd_cmd_write(
 			spi, CAN_FIFOCON(TX_FIFO(i)),
 			CAN_FIFOCON_FRESET | /* reset FIFO */
 			(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
@@ -1280,7 +1301,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* we need to move out of CONFIG mode shortly to get pointers */
-	ret = mcp2517fd_cmd_writele32(
+	ret = mcp2517fd_cmd_write(
 		spi, CAN_CON, con_val |
 		(CAN_CON_MODE_INTERNAL_LOOPBACK << CAN_CON_REQOP_SHIFT));
 	if (ret)
@@ -1288,7 +1309,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 
 	/* get all the relevant addresses for the transmit fifos */
 	for (i = priv->tx_fifos - 1; i >= 0; i--) {
-		ret = mcp2517fd_cmd_readle32(spi, CAN_FIFOUA(TX_FIFO(i)),
+		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(TX_FIFO(i)),
 					    &val);
 		if (ret)
 			return ret;
@@ -1306,15 +1327,17 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		msg->data.xfer.tx_buf = &msg->data.cmd_addr;
 		msg->min_length = sizeof(msg->data.cmd_addr) +
 			sizeof(msg->data.obj);
-		msg->data.cmd_addr = mcp2517fd_calc_cmd_addr(
-			INSTRUCTION_WRITE, val);
+		mcp2517fd_calc_cmd_addr(
+			INSTRUCTION_WRITE, val,
+			(u8 *)&msg->data.cmd_addr);
 		/* and the trigger */
 		spi_message_init_with_transfers(
 			&msg->trigger.msg, &msg->trigger.xfer, 1);
 		msg->trigger.xfer.tx_buf = &msg->trigger.cmd_addr;
 		msg->trigger.xfer.len = 3;
-		msg->trigger.cmd_addr = mcp2517fd_calc_cmd_addr(
-			INSTRUCTION_WRITE, CAN_FIFOCON(TX_FIFO(i)) + 1);
+		mcp2517fd_calc_cmd_addr(
+			INSTRUCTION_WRITE, CAN_FIFOCON(TX_FIFO(i)) + 1,
+			(u8 *)&msg->trigger.cmd_addr);
 		msg->trigger.data =
 			(CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC) >> 8;
 
@@ -1323,7 +1346,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* for the rx fifo */
-	ret = mcp2517fd_cmd_readle32(spi, CAN_FIFOUA(RX_FIFO), &val);
+	ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(RX_FIFO), &val);
 	if (ret)
 		return ret;
 	val = FIFO_DATA(val);
@@ -1333,7 +1356,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		priv->rx_address, priv->rx_address_end);
 
 	/* for the TEF fifo */
-	ret = mcp2517fd_cmd_readle32(spi, CAN_TEFUA, &val);
+	ret = mcp2517fd_cmd_read(spi, CAN_TEFUA, &val);
 	if (ret)
 		return ret;
 	priv->tef_address_start = 0x400 + val;
@@ -1343,7 +1366,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		priv->tef_address, priv->tef_address_end);
 
 	/* now get back into config mode */
-	ret = mcp2517fd_cmd_writele32(
+	ret = mcp2517fd_cmd_write(
 		spi, CAN_CON, con_val |
 		(CAN_CON_MODE_CONFIG << CAN_CON_REQOP_SHIFT));
 	if (ret)
@@ -1387,7 +1410,7 @@ static int mcp2517fd_setup(struct net_device *net,
 		return ret;
 
 	/* set up RAM ECC (but for now without interrupts) */
-	ret = mcp2517fd_cmd_writele32(spi, MCP2517FD_ECCCON,
+	ret = mcp2517fd_cmd_write(spi, MCP2517FD_ECCCON,
 				      MCP2517FD_ECCCON_ECCEN);
 	if (ret)
 		return ret;
@@ -1437,20 +1460,20 @@ static int mcp2517fd_setup(struct net_device *net,
 	if (priv->gpio_opendrain)
 		val |= MCP2517FD_IOCON_INTOD;
 
-	ret = mcp2517fd_cmd_writele32(spi, MCP2517FD_IOCON, val);
+	ret = mcp2517fd_cmd_write(spi, MCP2517FD_IOCON, val);
 	if (ret)
 		return ret;
 
 	/* set up Transmitter Delay compensation */
-	ret = mcp2517fd_cmd_writele32(spi, CAN_TDC, CAN_TDC_EDGFLTEN);
+	ret = mcp2517fd_cmd_write(spi, CAN_TDC, CAN_TDC_EDGFLTEN);
 	if (ret)
 		return ret;
 
 	/* time stamp control register - 1ns resolution, but disabled */
-	ret = mcp2517fd_cmd_writele32(spi, CAN_TBC, 0);
+	ret = mcp2517fd_cmd_write(spi, CAN_TBC, 0);
 	if (ret)
 		return ret;
-	ret = mcp2517fd_cmd_writele32(spi, CAN_TSCON,
+	ret = mcp2517fd_cmd_write(spi, CAN_TSCON,
 				      CAN_TSCON_TBCEN |
 				      ((priv->can.clock.freq / 1000000)
 				       << CAN_TSCON_TBCPRE_SHIFT));
@@ -1458,7 +1481,7 @@ static int mcp2517fd_setup(struct net_device *net,
 		return ret;
 
 	/* interrupt configuration */
-	ret = mcp2517fd_cmd_writele32(spi, CAN_INT, 0);
+	ret = mcp2517fd_cmd_write(spi, CAN_INT, 0);
 	if (ret)
 		return ret;
 
@@ -1477,19 +1500,35 @@ static int mcp2517fd_setup(struct net_device *net,
 	return ret;
 }
 
+static int mcp2517fd_disable_interrupts(struct spi_device *spi)
+{
+	disable_irq(spi->irq);
+	return 0;
+}
+
+static int mcp2517fd_enable_interrupts(struct spi_device *spi)
+{
+	enable_irq(spi->irq);
+	return 0;
+}
+
 static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 {
 	struct mcp2517fd_priv *priv = dev_id;
 	struct spi_device *spi = priv->spi;
 	struct net_device *net = priv->net;
+	u32 iflags;
+	int ret;
 
-	mutex_lock(&priv->mcp_lock);
+	/* read interrupt status flags */
+	ret = mcp2517fd_cmd_read(spi, CAN_INT, &iflags);
 
-	while (!priv->force_quit) {
+	/* */
 
-	}
+	/* enable irq */
+	ret = mcp2517fd_disable_interrupts(spi);
 
-	mutex_unlock(&priv->mcp_lock);
+
 	return IRQ_HANDLED;
 }
 
@@ -1497,7 +1536,6 @@ static int mcp2517fd_open(struct net_device *net)
 {
 	struct mcp2517fd_priv *priv = netdev_priv(net);
 	struct spi_device *spi = priv->spi;
-	unsigned long flags = IRQF_ONESHOT | IRQF_TRIGGER_FALLING;
 	int ret;
 
 	ret = open_candev(net);
@@ -1511,8 +1549,10 @@ static int mcp2517fd_open(struct net_device *net)
 	mutex_lock(&priv->mcp_lock);
 	priv->force_quit = 0;
 
-	ret = request_threaded_irq(spi->irq, NULL, mcp2517fd_can_ist,
-				   flags | IRQF_ONESHOT, DEVICE_NAME, priv);
+	ret = request_threaded_irq(spi->irq, NULL,
+				   mcp2517fd_can_ist,
+				   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
+				   DEVICE_NAME, priv);
 	if (ret) {
 		dev_err(&spi->dev, "failed to acquire irq %d\n", spi->irq);
 		mcp2517fd_power_enable(priv->transceiver, 0);
