@@ -43,7 +43,7 @@
 
 #define MCP2517FD_OSC_POLLING_JIFFIES	(HZ / 2)
 
-#define TX_ECHO_SKB_MAX	1
+#define TX_ECHO_SKB_MAX	32
 
 #define INSTRUCTION_RESET		0x0000
 #define INSTRUCTION_READ		0x3000
@@ -567,7 +567,7 @@ struct mcp2517fd_obj_rx {
 };
 
 /* the prepared transmit spi message */
-struct mcp2517_fd_obj_tx_msg {
+struct mcp2517fd_obj_tx_msg {
 	int skb_idx;
 	unsigned int min_length;
 	struct {
@@ -619,7 +619,7 @@ enum mcp2517fd_model {
 	CAN_MCP2517FD	= 0x2517,
 };
 
-enum mcp2517_gpio_mode {
+enum mcp2517fd_gpio_mode {
 	gpio_mode_int		= 0,
 	gpio_mode_standby	= MCP2517FD_IOCON_XSTBYEN,
 	gpio_mode_out_low	= MCP2517FD_IOCON_PM0,
@@ -637,13 +637,14 @@ struct mcp2517fd_priv {
 	bool clock_div2;
 	int  clock_odiv;
 
-	enum mcp2517_gpio_mode  gpio0_mode;
-	enum mcp2517_gpio_mode  gpio1_mode;
+	enum mcp2517fd_gpio_mode  gpio0_mode;
+	enum mcp2517fd_gpio_mode  gpio1_mode;
 	bool gpio_opendrain;
 
 	/* flags that should stay in the con_register */
 	u32 con_val;
 
+	int spi_max_speed_hz;
 	int spi_setup_speed_hz;
 	int spi_normal_speed_hz;
 
@@ -652,8 +653,10 @@ struct mcp2517fd_priv {
 	int payload_size;
 	u8 payload_mode;
 
+	struct mutex txfifo_lock;
 	u8 tx_fifos;
-	struct mcp2517_fd_obj_tx_msg tx_msg[32];
+	struct mcp2517fd_obj_tx_msg tx_msg[32];
+	u32 tx_pending_mask;
 
 	u32 tef_address_start;
 	u32 tef_address_end;
@@ -765,44 +768,105 @@ static void dump_reg(struct spi_device *spi)
 	}
 }
 
-static void mcp2517fd_transmit_message(struct spi_device *spi)
+static int mcp2517fd_transmit_message_common(
+	struct spi_device *spi, struct mcp2517fd_obj_tx_msg *msg,
+	struct mcp2517fd_obj_tx *obj, int len, u8 *data)
 {
-	unsigned int id = 0;
-	unsigned int len = 6;
-	u32 addr = 0x155;
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	struct mcp2517_fd_obj_tx_msg * msg = &priv->tx_msg[id];
-	struct mcp2517fd_obj_tx obj;
-	u32 data[16];
 	int ret;
 
-	if (len > 8) {
-		return;
-	}
+	/* transform to le32*/
+	dev_err(&spi->dev, "XXX - %08x - %08x\n", obj->id, obj->flags);
+	obj->id = cpu_to_le32(obj->id);
+	obj->flags = cpu_to_le32(obj->flags);
+	dev_err(&spi->dev, "YYY - %08x - %08x\n", obj->id, obj->flags);
 
-	/* set the variables - aligned */
-	obj.id = cpu_to_le32(addr);
-	obj.flags = cpu_to_le32((len << CAN_OBJ_FLAGS_DLC_SHIFT) |
-			  (id << CAN_OBJ_FLAGS_SEQ_SHIFT));
-	data[0] = cpu_to_le32(0x44332211);
-	data[1] = cpu_to_le32(0x88776655);
-	/* copy data to non-aligned - without leaking... */
+	/* copy data to non-aligned - without leaking heap data */
 	memset(msg->data.payload, 0, sizeof(*msg->data.payload));
-	memcpy(msg->data.obj, &obj, sizeof(obj));
-	memcpy(msg->data.payload, data, sizeof(data));
+	memcpy(msg->data.obj, obj, sizeof(*obj));
+	memcpy(msg->data.payload, data, len);
 
 	/* transfers to FIFO RAM have to be multiple of 4 */
 	msg->data.xfer.len = msg->min_length + ALIGN(len, 4);
 
-	/* and submit async transfers - 2 work quicker than 1 surprizingly */
+	/*
+	 *  and submit async transfers
+	 * - surprizingly 2 separate work quicker than 1
+	 */
 	ret = spi_async(spi, &msg->data.msg);
-	dev_err(&spi->dev," spi_async: %i", ret);
+	dev_err(&spi->dev," spi_async: %i - %i", ret, msg->data.xfer.speed_hz);
+	if (ret)
+		return NETDEV_TX_BUSY;
 	ret = spi_async(spi, &msg->trigger.msg);
 	dev_err(&spi->dev," spi_async: %i", ret);
+	if (ret)
+		return NETDEV_TX_BUSY;
 
-//	mdelay(3000);
+	return NETDEV_TX_OK;
 }
 
+static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int prio,
+				      struct canfd_frame *frame)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_obj_tx_msg * msg = &priv->tx_msg[prio];
+	struct mcp2517fd_obj_tx obj;
+	int dlc = can_len2dlc(frame->len);
+
+	frame->len = can_dlc2len(dlc);
+
+	if (frame->can_id & CAN_EFF_FLAG) {
+		obj.id = frame->can_id & CAN_EFF_MASK;
+		obj.flags = CAN_OBJ_FLAGS_IDE;
+	} else {
+		obj.id = frame->can_id & CAN_SFF_MASK;
+		obj.flags = 0;
+	}
+
+	obj.flags |= (dlc << CAN_OBJ_FLAGS_DLC_SHIFT) |
+		(prio << CAN_OBJ_FLAGS_SEQ_SHIFT) |
+		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
+		(frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0 |
+		(frame->flags & CANFD_BRS) ? CAN_OBJ_FLAGS_BRS : 0 |
+		(frame->flags & CANFD_ESI) ? CAN_OBJ_FLAGS_ESI : 0 |
+		CAN_OBJ_FLAGS_FDF;
+
+	return mcp2517fd_transmit_message_common(
+		spi, msg, &obj, frame->len, frame->data);
+}
+
+static int mcp2517fd_transmit_message(struct spi_device *spi, int prio,
+				      struct can_frame *frame)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_obj_tx_msg * msg = &priv->tx_msg[prio];
+	struct mcp2517fd_obj_tx obj;
+
+	if (frame->can_dlc > 8)
+		frame->can_dlc = 8;
+
+	if (frame->can_id & CAN_EFF_FLAG) {
+		obj.id = frame->can_id & CAN_EFF_MASK;
+		obj.flags = CAN_OBJ_FLAGS_IDE;
+	} else {
+		obj.id = frame->can_id & CAN_SFF_MASK;
+		obj.flags = 0;
+	}
+
+	dev_err(&spi->dev, "AAA %08x - %i\n", obj.flags, frame->can_dlc);
+
+	obj.flags |=
+		(frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT);
+	dev_err(&spi->dev, "AAA %08x - %i\n", obj.flags, frame->can_dlc);
+	obj.flags |=
+		(prio << CAN_OBJ_FLAGS_SEQ_SHIFT) |
+		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
+		(frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+
+	dev_err(&spi->dev, "AAA %08x - %i\n", obj.flags, frame->can_dlc);
+
+	return mcp2517fd_transmit_message_common(
+		spi, msg, &obj, frame->can_dlc, frame->data);
+}
 
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
 {
@@ -868,7 +932,48 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 					struct net_device *net)
 {
-	return -ENOMEM;
+        struct mcp2517fd_priv *priv = netdev_priv(net);
+        struct spi_device *spi = priv->spi;
+	unsigned long prio;
+	int ret;
+
+	if (can_dropped_invalid_skb(net, skb))
+		return NETDEV_TX_OK;
+
+	dev_err(&spi->dev, "start_xmit:\n\tmask: %08x\n", priv->tx_pending_mask);
+
+	/* decide on fifo to assign */
+	mutex_lock(&priv->txfifo_lock);
+	prio = fls(priv->tx_pending_mask);
+	if (prio >= priv->tx_fifos) {
+		mutex_unlock(&priv->txfifo_lock);
+		return NETDEV_TX_BUSY;
+	}
+	/* mark as pending */
+	priv->tx_pending_mask |= BIT(prio);
+	mutex_unlock(&priv->txfifo_lock);
+
+	dev_err(&spi->dev, "\tprio: %lu of %i\n", prio, priv->tx_fifos);
+	dev_err(&spi->dev, "\tmask: %08x\n", priv->tx_pending_mask);
+
+	/* if we are the last one, then disable the queue */
+	if (prio == priv->tx_fifos - 1) {
+		netif_stop_queue(net);
+		dump_reg(spi);
+	}
+
+	/* now process it for real */
+	if (can_is_canfd_skb(skb))
+		ret = mcp2517fd_transmit_fdmessage(
+			spi, prio, (struct canfd_frame *)skb->data);
+	else
+		ret = mcp2517fd_transmit_message(
+			spi, prio, (struct can_frame *)skb->data);
+
+	/* keep it for reference until the message really got transmitted */
+	if (ret == NETDEV_TX_OK)
+		can_put_echo_skb(skb, net, prio);
+	return ret;
 }
 
 static void mcp2517fd_open_clean(struct net_device *net)
@@ -1093,7 +1198,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				struct spi_device *spi)
 {
 	u32 con_val = priv->con_val;
-	struct mcp2517_fd_obj_tx_msg *msg;
+	struct mcp2517fd_obj_tx_msg *msg;
 	u32 val;
 	int ret;
 	int i;
@@ -1168,7 +1273,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 			CAN_FIFOCON_FRESET | /* reset FIFO */
 			(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
 			(0 << CAN_FIFOCON_FSIZE_SHIFT) | /* 1 FIFO only */
-			(i << CAN_FIFOCON_TXPRI_SHIFT) | /* priority */
+			((i) << CAN_FIFOCON_TXPRI_SHIFT) | /* priority */
 			CAN_FIFOCON_TXEN);
 		if (ret)
 			return ret;
@@ -1435,7 +1540,7 @@ static int mcp2517fd_open(struct net_device *net)
 		goto open_unlock;
 	}
 
-	mcp2517fd_transmit_message(spi);
+//	mcp2517fd_transmit_message(spi);
 
 	can_led_event(net, CAN_LED_EVENT_OPEN);
 
@@ -1444,6 +1549,21 @@ static int mcp2517fd_open(struct net_device *net)
 open_unlock:
 	mutex_unlock(&priv->mcp_lock);
 	return ret;
+}
+
+static void mcp2517fd_clean(struct net_device *net)
+{
+        struct mcp2517fd_priv *priv = netdev_priv(net);
+	int i;
+
+	for (i = 0; i < priv->tx_fifos; i++) {
+		if (priv->tx_pending_mask & BIT(i)) {
+			can_free_echo_skb(priv->net, 0);
+			net->stats.tx_errors++;
+		}
+	}
+
+	priv->tx_pending_mask = 0;
 }
 
 static int mcp2517fd_stop(struct net_device *net)
@@ -1462,8 +1582,9 @@ static int mcp2517fd_stop(struct net_device *net)
 	mcp251x_write_reg(spi, CANINTF, 0x00);
 
 	mcp251x_write_reg(spi, TXBCTRL(0), 0);
-	mcp251x_clean(net);
-
+	*/
+	mcp2517fd_clean(net);
+	/*
 	mcp251x_hw_sleep(spi);
 	*/
 	mcp2517fd_power_enable(priv->transceiver, 0);
@@ -1586,11 +1707,21 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		priv->can.clock.freq /= MCP2517FD_SCLK_DIVIDER;
 
 	/* calclculate the clock frequencies to use */
+	priv->spi_max_speed_hz = spi->max_speed_hz;
 	priv->spi_setup_speed_hz = freq / 2;
 	priv->spi_normal_speed_hz = priv->can.clock.freq / 2;
 	if (priv->clock_div2) {
 		priv->spi_setup_speed_hz /= MCP2517FD_SCLK_DIVIDER;
 		priv->spi_normal_speed_hz /= MCP2517FD_SCLK_DIVIDER;
+	}
+
+	if (priv->spi_max_speed_hz) {
+		priv->spi_setup_speed_hz = min_t(int,
+						 priv->spi_setup_speed_hz,
+						 priv->spi_max_speed_hz);
+		priv->spi_normal_speed_hz = min_t(int,
+						  priv->spi_normal_speed_hz,
+						  priv->spi_max_speed_hz);
 	}
 
 	/* Configure the SPI bus */
@@ -1614,6 +1745,7 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	priv->spi = spi;
 	mutex_init(&priv->mcp_lock);
+	mutex_init(&priv->txfifo_lock);
 
 	SET_NETDEV_DEV(net, &spi->dev);
 
@@ -1663,6 +1795,10 @@ static int mcp2517fd_can_remove(struct spi_device *spi)
 		clk_disable_unprepare(priv->clk);
 
 	free_candev(net);
+
+	/* restore max_speed_hz */
+	spi->max_speed_hz = priv->spi_max_speed_hz;
+	spi_setup(spi);
 
 	return 0;
 }
