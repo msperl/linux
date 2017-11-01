@@ -698,6 +698,10 @@ static int mcp2517fd_cmd_reset(struct spi_device *spi)
 	return spi_write(spi, &tx_buf, 2);
 }
 
+/*
+#define DEBUG
+*/
+
 /* read a register, but we are only interrested in a few bytes */
 static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 				   u32 *data, u32 mask)
@@ -729,12 +733,12 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 
 	/* convert it to correct cpu ordering */
 	*data = le32_to_cpu(*data);
-
+#ifdef DEBUG
 	dev_err(&spi->dev, "read_mask: %02x%02x = 0x%08x\n",
 		cmd[0],cmd[1], *data);
 	dev_err(&spi->dev, "\t\tmask: %08x [%i - %i] %i\n",
 		mask, first_byte, last_byte, len_byte);
-
+#endif
 	return 0;
 }
 
@@ -763,12 +767,12 @@ static int mcp2517fd_cmd_write_mask(struct spi_device *spi, u32 reg,
 	mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE, reg + first_byte, txdata);
 	data = cpu_to_le32(data);
 	memcpy(txdata + 2, &data + first_byte, len_byte);
-
+#ifdef DEBUG
 	dev_err(&spi->dev, "write_mask 0x%02x%02x = 0x%08x\n",
 		txdata[0],txdata[1], data);
 	dev_err(&spi->dev, "\t\tmask: %08x [%i - %i] %i\n",
 		mask, first_byte, last_byte, len_byte);
-
+#endif
 	/* now execute the command */
 	return spi_write(spi, txdata, len_byte + 2);
 }
@@ -1579,8 +1583,6 @@ static int mcp2517fd_open(struct net_device *net)
 		mcp2517fd_open_clean(net);
 		goto open_unlock;
 	}
-
-//	mcp2517fd_transmit_message(spi);
 
 	can_led_event(net, CAN_LED_EVENT_OPEN);
 
