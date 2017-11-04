@@ -800,10 +800,8 @@ static int mcp2517fd_transmit_message_common(
 	int ret;
 
 	/* transform to le32*/
-	dev_err(&spi->dev, "XXX - %08x - %08x\n", obj->id, obj->flags);
 	obj->id = cpu_to_le32(obj->id);
 	obj->flags = cpu_to_le32(obj->flags);
-	dev_err(&spi->dev, "YYY - %08x - %08x\n", obj->id, obj->flags);
 
 	/* copy data to non-aligned - without leaking heap data */
 	memset(msg->data.payload, 0, sizeof(*msg->data.payload));
@@ -877,17 +875,12 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int prio,
 		obj.flags = 0;
 	}
 
-	dev_err(&spi->dev, "AAA %08x - %i\n", obj.flags, frame->can_dlc);
-
 	obj.flags |=
 		(frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT);
-	dev_err(&spi->dev, "AAA %08x - %i\n", obj.flags, frame->can_dlc);
 	obj.flags |=
 		(prio << CAN_OBJ_FLAGS_SEQ_SHIFT) |
 		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
 		(frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
-
-	dev_err(&spi->dev, "AAA %08x - %i\n", obj.flags, frame->can_dlc);
 
 	return mcp2517fd_transmit_message_common(
 		spi, msg, &obj, frame->can_dlc, frame->data);
@@ -1248,9 +1241,11 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		return -EINVAL;
 	}
 
-	/* set up TEF SIZE to the number of tx_fifos */
+	/* set up TEF SIZE to the number of tx_fifos and IRQ */
 	ret = mcp2517fd_cmd_write(
 		spi, CAN_TEFCON,
+		CAN_TEFCON_FRESET |
+		CAN_TEFCON_TEFNEIE |
 		CAN_TEFCON_TEFTSEN |
 		((priv->tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT));
 	if (ret)
@@ -1265,7 +1260,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		CAN_FIFOCON_FRESET | /* reset FIFO */
 		CAN_FIFOCON_TFERFFIE | /* FIFO Full Interrupt enable */
 		CAN_FIFOCON_TFHRFHIE | /* FIFO Half full Interrupt enable */
-		CAN_FIFOCON_TFNRFNIE
+		CAN_FIFOCON_TFNRFNIE /* FIFO not empty Interrupt enable */
 		);
 	if (ret)
 		return ret;
@@ -1395,6 +1390,19 @@ static int mcp2517fd_clear_ram(struct spi_device *spi)
 	return spi_sync_transfer(spi, t, 2);
 }
 
+static int mcp2517fd_disable_interrupts(struct spi_device *spi)
+{
+	return mcp2517fd_cmd_write(spi, CAN_INT, 0);
+}
+
+static int mcp2517fd_enable_interrupts(struct spi_device *spi)
+{
+	return mcp2517fd_cmd_write(spi, CAN_INT,
+				   CAN_INT_TEFIE |
+				   CAN_INT_RXIE
+		);
+}
+
 static int mcp2517fd_setup(struct net_device *net,
 			   struct mcp2517fd_priv *priv,
 			   struct spi_device *spi)
@@ -1420,7 +1428,7 @@ static int mcp2517fd_setup(struct net_device *net,
 		return ret;
 
 	/* GPIO handling - could expose this as gpios*/
-	val = 0; /* INT PUSHPULL INT , TXCAN PUSH/PULL, no Standby */
+	val = 0; /* PUSHPULL INT , TXCAN PUSH/PULL, no Standby */
 	val |= MCP2517FD_IOCON_TXCANOD; /* OpenDrain TXCAN */
 	val |= MCP2517FD_IOCON_INTOD; /* OpenDrain INT pins */
 
@@ -1484,11 +1492,6 @@ static int mcp2517fd_setup(struct net_device *net,
 	if (ret)
 		return ret;
 
-	/* interrupt configuration */
-	ret = mcp2517fd_cmd_write(spi, CAN_INT, 0);
-	if (ret)
-		return ret;
-
 	/* setup value of con_register */
 	priv->con_val = CAN_CON_STEF /* enable TEF */;
 	/* non iso FD mode */
@@ -1500,20 +1503,11 @@ static int mcp2517fd_setup(struct net_device *net,
 
 	/* setup fifos - this also puts the system into sleep mode */
 	ret = mcp2517fd_setup_fifo(net, priv, spi);
+	if (ret)
+		return ret;
 
-	return ret;
-}
-
-static int mcp2517fd_disable_interrupts(struct spi_device *spi)
-{
-	disable_irq(spi->irq);
-	return 0;
-}
-
-static int mcp2517fd_enable_interrupts(struct spi_device *spi)
-{
-	enable_irq(spi->irq);
-	return 0;
+	/* interrupt configuration */
+	return mcp2517fd_enable_interrupts(spi);
 }
 
 static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
@@ -1528,9 +1522,12 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 	ret = mcp2517fd_cmd_read(spi, CAN_INT, &iflags);
 
 	/* */
+	dev_err(&spi->dev,"in_irq\n");
 
 	/* enable irq */
 	ret = mcp2517fd_disable_interrupts(spi);
+
+
 
 
 	return IRQ_HANDLED;
@@ -1619,16 +1616,12 @@ static int mcp2517fd_stop(struct net_device *net)
 	free_irq(spi->irq, priv);
 
 	/* Disable and clear pending interrupts */
-	/*
-	mcp251x_write_reg(spi, CANINTE, 0x00);
-	mcp251x_write_reg(spi, CANINTF, 0x00);
+	mcp2517fd_disable_interrupts(spi);
 
-	mcp251x_write_reg(spi, TXBCTRL(0), 0);
-	*/
 	mcp2517fd_clean(net);
-	/*
-	mcp251x_hw_sleep(spi);
-	*/
+
+	mcp2517fd_hw_sleep(spi);
+
 	mcp2517fd_power_enable(priv->transceiver, 0);
 
 	priv->can.state = CAN_STATE_STOPPED;
@@ -1722,9 +1715,9 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	spi_set_drvdata(spi, priv);
 
-	/* set up gpio modes as GPIO in*/
-	priv->gpio0_mode = gpio_mode_in;
-	priv->gpio1_mode = gpio_mode_in;
+	/* set up gpio modes as GPIO INT*/
+	priv->gpio0_mode = gpio_mode_int;
+	priv->gpio1_mode = gpio_mode_int;
 
 	/* if we have a clock that is smaller then 4MHz, then enable the pll */
 	priv->clock_pll = (freq <= MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY);
