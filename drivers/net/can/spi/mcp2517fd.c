@@ -274,6 +274,7 @@
 	GENMASK(CAN_VEC_RXCODE_SHIFT + CAN_VEC_RXCODE_BITS - 1, \
 		CAN_VEC_RXCODE_SHIFT)
 #define CAN_INT				CAN_SFR_BASE(0x1C)
+#  define CAN_INT_IF_SHIFT		0
 #  define CAN_INT_TXIF			BIT(0)
 #  define CAN_INT_RXIF			BIT(1)
 #  define CAN_INT_TBCIF			BIT(2)
@@ -287,18 +288,49 @@
 #  define CAN_INT_CERRIF		BIT(13)
 #  define CAN_INT_WAKIF			BIT(14)
 #  define CAN_INT_IVMIF			BIT(15)
-#  define CAN_INT_TXIE			BIT(16)
-#  define CAN_INT_RXIE			BIT(17)
-#  define CAN_INT_TBCIE			BIT(18)
-#  define CAN_INT_MODIE			BIT(19)
-#  define CAN_INT_TEFIE			BIT(20)
-#  define CAN_INT_ECCIE			BIT(24)
-#  define CAN_INT_SPICRCIE		BIT(25)
-#  define CAN_INT_TXATIE		BIT(26)
-#  define CAN_INT_RXOVIE		BIT(27)
-#  define CAN_INT_SERRIE		BIT(29)
-#  define CAN_INT_WAKIE			BIT(30)
-#  define CAN_INT_IVMIE			BIT(31)
+#  define CAN_INT_IF_MASK		\
+	( CAN_INT_TXIF |		\
+	  CAN_INT_RXIF |		\
+	  CAN_INT_TBCIF	|		\
+	  CAN_INT_MODIF	|		\
+	  CAN_INT_TEFIF	|		\
+	  CAN_INT_ECCIF	|		\
+	  CAN_INT_SPICRCIF |		\
+	  CAN_INT_TXATIF |		\
+	  CAN_INT_RXOVIF |		\
+	  CAN_INT_CERRIF |		\
+	  CAN_INT_SERRIF |		\
+	  CAN_INT_WAKEIF |		\
+	  CAN_INT_IVMIF )
+#  define CAN_INT_IE_SHIFT		16
+#  define CAN_INT_TXIE			(CAN_INT_TXIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_RXIE			(CAN_INT_RXIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_TBCIE			(CAN_INT_TBCIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_MODIE			(CAN_INT_MODIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_TEFIE			(CAN_INT_TEFIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_ECCIE			(CAN_INT_ECCIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_SPICRCIE		\
+	(CAN_INT_SPICRCIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_TXATIE		(CAN_INT_TXATIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_RXOVIE		(CAN_INT_RXOVIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_CERRIE		(CAN_INT_CERRIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_SERRIE		(CAN_INT_SERRIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_WAKIE			(CAN_INT_WAKIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_IVMIE			(CAN_INT_IVMIF << CAN_INT_IE_SHIFT)
+#  define CAN_INT_IE_MASK		\
+	( CAN_INT_TXIE |		\
+	  CAN_INT_RXIE |		\
+	  CAN_INT_TBCIE	|		\
+	  CAN_INT_MODIE	|		\
+	  CAN_INT_TEFIE	|		\
+	  CAN_INT_ECCIE	|		\
+	  CAN_INT_SPICRCIE |		\
+	  CAN_INT_TXATIE |		\
+	  CAN_INT_RXOVIE |		\
+	  CAN_INT_CERRIE |		\
+	  CAN_INT_SERRIE |		\
+	  CAN_INT_WAKEIE |		\
+	  CAN_INT_IVMIE )
 #define CAN_RXIF			CAN_SFR_BASE(0x20)
 #define CAN_TXIF			CAN_SFR_BASE(0x24)
 #define CAN_RXOVIF			CAN_SFR_BASE(0x28)
@@ -654,8 +686,8 @@ struct mcp2517fd_priv {
 
 	struct mutex txfifo_lock;
 	u8 tx_fifos;
-	struct mcp2517fd_obj_tx_msg tx_msg[32];
 	u32 tx_pending_mask;
+	struct mcp2517fd_obj_tx_msg tx_msg[32];
 
 	u32 tef_address_start;
 	u32 tef_address_end;
@@ -666,6 +698,26 @@ struct mcp2517fd_priv {
 	u32 rx_address_inc;
 	u32 rx_address_end;
 	u32 rx_address;
+
+	struct {
+		u32 intf;
+		/* ASSERT(CAN_INT + 4 == CAN_RXIF) */
+		u32 rxif;
+		/* ASSERT(CAN_RXIF + 4 == CAN_TXIF) */
+		u32 txif;
+		/* ASSERT(CAN_TXIF + 4 == CAN_RXOVIF) */
+		u32 rxovif;
+		/* ASSERT(CAN_RXOVIF + 4 == CAN_TXATIF) */
+		u32 txatif;
+		/* ASSERT(CAN_TXATIF + 4 == CAN_TXREQ) */
+		u32 txreq;
+		/* ASSERT(CAN_TXREQ + 4 == CAN_TREC) */
+		u32 trec;
+		/* ASSERT(CAN_TREC + 4 == CAN_BDIAG0) */
+		u32 bdiag0;
+		/* ASSERT(CAN_BDIAG0 + 4 == CAN_BDIAG1) */
+		u32 bdiag1;
+	} status;
 
 	int force_quit;
 	int after_suspend;
@@ -1062,9 +1114,11 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 	mutex_lock(&priv->txfifo_lock);
 	prio = fls(priv->tx_pending_mask);
 	if (prio >= priv->tx_fifos) {
+		/* we should not get here - the queue should be disabled */
 		mutex_unlock(&priv->txfifo_lock);
 		return NETDEV_TX_BUSY;
 	}
+
 	/* mark as pending */
 	priv->tx_pending_mask |= BIT(prio);
 	mutex_unlock(&priv->txfifo_lock);
@@ -1488,7 +1542,7 @@ static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 {
 	return mcp2517fd_cmd_write(spi, CAN_INT,
 				   CAN_INT_TEFIE |
-				   CAN_INT_RXIE,
+0*				   CAN_INT_RXIE,
 				   speed_hz);
 }
 
@@ -1601,26 +1655,74 @@ static int mcp2517fd_setup(struct net_device *net,
 					   priv->spi_setup_speed_hz);
 }
 
+static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/* */
+	dev_err(&spi->dev, "Reset_TEF\n");
+	return mcp2517fd_cmd_write_mask(spi,
+					CAN_TEFCON,
+					CAN_TEFCON_FRESET,
+					CAN_TEFCON_FRESET,
+					priv->spi_speed_hz);
+
+	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int ret;
+
+	/* handle the tef */
+	if (priv->status.intf & CAN_INT_TEFIF) {
+		ret = mcp2517fd_can_ist_handle_tefif(spi);
+		if (ret)
+			return ret;
+	}
+
+	/* handle MODIF */
+	//if (priv->status.intf & CAN_INT_MODIF)
+
+	return 0;
+}
+
 static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 {
 	struct mcp2517fd_priv *priv = dev_id;
 	struct spi_device *spi = priv->spi;
 	struct net_device *net = priv->net;
-	u32 iflags;
 	int ret;
 
-	/* read interrupt status flags */
-	ret = mcp2517fd_cmd_read(spi, CAN_INT, &iflags,
-				 priv->spi_speed_hz);
+	while (!priv->force_quit) {
+		/* read interrupt status flags */
+		ret = mcp2517fd_cmd_readn(spi, CAN_INT,
+					  &priv->status, sizeof(priv->status),
+					  priv->spi_speed_hz);
+		if (ret)
+			return ret;
 
-	/* */
-	dev_err(&spi->dev,"in_irq\n");
+		dev_err(&spi->dev,"irq: intf:\t0x%08x\n", priv->status.intf);
+		dev_err(&spi->dev,"irq: txif:\t0x%08x\n", priv->status.txif);
+		dev_err(&spi->dev,"irq: txreq:\t0x%08x\n", priv->status.txreq);
+		dev_err(&spi->dev,"irq: txpend:\t0x%08x\n", priv->tx_pending_mask);
+		dev_err(&spi->dev,"irq: rxif:\t0x%08x\n", priv->status.rxif);
+		dev_err(&spi->dev,"irq: rxovif:\t0x%08x\n", priv->status.rxovif);
 
-	/* enable irq */
-	//ret = mcp2517fd_disable_interrupts(spi);
+		dev_err(&spi->dev,"irq: trec:\t0x%08x\n", priv->status.trec);
+		dev_err(&spi->dev,"irq: bdiag0:\t0x%08x\n", priv->status.bdiag0);
+		dev_err(&spi->dev,"irq: bdiag1:\t0x%08x\n", priv->status.bdiag1);
 
+		if ((priv->status.intf &
+		     (priv->status.intf >> CAN_INT_IE_SHIFT)) == 0)
+			break;
 
-
+		/* handle the status */
+		ret = mcp2517fd_can_ist_handle_status(spi);
+		if (ret)
+			return ret;
+	}
 
 	return IRQ_HANDLED;
 }
