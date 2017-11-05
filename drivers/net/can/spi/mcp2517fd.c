@@ -799,13 +799,13 @@ static int mcp2517fd_cmd_reset(struct spi_device *spi, u32 speed_hz)
 }
 
 /* read multiple bytes, transform some registers */
-static int mcp2517fd_cmd_readn(struct spi_device *spi, u32 reg, u8 *data,
-			       int n, u32 speed_hz)
+static int mcp2517fd_cmd_readn(struct spi_device *spi, u32 reg,
+			       void *data, int n, u32 speed_hz)
 {
 	u8 cmd[2];
 	int ret;
 
-	mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg + first_byte, cmd);
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg, cmd);
 
 	ret = mcp2517fd_write_then_read(spi, &cmd, 2, data, n, speed_hz);
 	if (ret)
@@ -814,6 +814,15 @@ static int mcp2517fd_cmd_readn(struct spi_device *spi, u32 reg, u8 *data,
 	return 0;
 }
 
+static int mcp2517fd_convert_to_cpu(u32* data, int n)
+{
+	int i;
+
+	for(i = 0; i < n; i++)
+		data[i] = le32_to_cpu(data[i]);
+
+	return 0;
+}
 
 /* read a register, but we are only interrested in a few bytes */
 static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
@@ -821,7 +830,6 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 {
 	int first_byte, last_byte, len_byte;
 	int ret;
-	u8 cmd[2];
 
 	/* check that at least one bit is set */
 	if (! mask)
@@ -832,6 +840,7 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 	last_byte = (fls(mask) - 1)  >> 3;
 	len_byte = last_byte - first_byte +1;
 
+	/* do a partial read */
 	*data = 0;
 	ret=mcp2517fd_cmd_readn(spi, reg,
 				((void *)data + first_byte), len_byte,
@@ -839,10 +848,7 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 	if (ret)
 		return ret;
 
-	/* convert it to correct cpu ordering */
-	*data = le32_to_cpu(*data);
-
-	return 0;
+	return mcp2517fd_convert_to_cpu(data, 1);
 }
 
 static int mcp2517fd_cmd_read(struct spi_device *spi, u32 reg, u32 *data,
