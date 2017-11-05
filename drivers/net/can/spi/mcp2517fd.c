@@ -644,9 +644,9 @@ struct mcp2517fd_priv {
 	/* flags that should stay in the con_register */
 	u32 con_val;
 
-	int spi_max_speed_hz;
-	int spi_setup_speed_hz;
-	int spi_normal_speed_hz;
+	u32 spi_max_speed_hz;
+	u32 spi_setup_speed_hz;
+	u32 spi_normal_speed_hz;
 
 	struct mutex mcp_lock; /* SPI device lock */
 
@@ -790,14 +790,14 @@ static void mcp2517fd_calc_cmd_addr(u16 cmd, u16 addr, u8 *data)
 	data[1] = (cmd >> 0) & 0xff;
 }
 
-static int mcp2517fd_cmd_reset(struct spi_device *spi)
+static int mcp2517fd_cmd_reset(struct spi_device *spi, u32 speed_hz)
 {
 	u8 tx_buf[2];
 
 	mcp2517fd_calc_cmd_addr(INSTRUCTION_RESET, 0, tx_buf);
 
 	/* write the reset command */
-	return spi_write(spi, &tx_buf, 2);
+	return mcp2517fd_write(spi, &tx_buf, 2, speed_hz);
 }
 
 /*
@@ -1123,7 +1123,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	mdelay(MCP2517FD_OST_DELAY_MS);
 
 	/* send a "blind" reset, hoping we are in Config mode */
-	mcp2517fd_cmd_reset(spi);
+	mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
 
 	/* Wait for oscillator startup again */
 	mdelay(MCP2517FD_OST_DELAY_MS);
@@ -1200,7 +1200,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	mdelay(MCP2517FD_OST_DELAY_MS);
 
 	/* reset can controller */
-	mcp2517fd_cmd_reset(spi);
+	mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
 
 	/* delay some time */
 	mdelay(MCP2517FD_OST_DELAY_MS);
