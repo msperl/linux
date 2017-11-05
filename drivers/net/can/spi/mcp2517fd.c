@@ -560,9 +560,9 @@
 
 #define CAN_OBJ_FLAGS_DLC_BITS		4
 #define CAN_OBJ_FLAGS_DLC_SHIFT		0
-#define CAN_OBJ_FLAGS_DLC_MASK				      \
-	GENMASK(CAN_FLAGS_DLC_SHIFT + CAN_FLAGS_DLC_BITS - 1, \
-		CAN_FLAGS_DLC_SHIFT)
+#define CAN_OBJ_FLAGS_DLC_MASK					      \
+	GENMASK(CAN_OBJ_FLAGS_DLC_SHIFT + CAN_OBJ_FLAGS_DLC_BITS - 1, \
+		CAN_OBJ_FLAGS_DLC_SHIFT)
 #define CAN_OBJ_FLAGS_IDE		BIT(4)
 #define CAN_OBJ_FLAGS_RTR		BIT(5)
 #define CAN_OBJ_FLAGS_BRS		BIT(6)
@@ -570,14 +570,14 @@
 #define CAN_OBJ_FLAGS_ESI		BIT(8)
 #define CAN_OBJ_FLAGS_SEQ_BITS		7
 #define CAN_OBJ_FLAGS_SEQ_SHIFT		9
-#define CAN_OBJ_FLAGS_SEQ_MASK				      \
-	GENMASK(CAN_FLAGS_SEQ_SHIFT + CAN_FLAGS_SEQ_BITS - 1, \
-		CAN_FLAGS_SEQ_SHIFT)
+#define CAN_OBJ_FLAGS_SEQ_MASK					      \
+	GENMASK(CAN_OBJ_FLAGS_SEQ_SHIFT + CAN_OBJ_FLAGS_SEQ_BITS - 1, \
+		CAN_OBJ_FLAGS_SEQ_SHIFT)
 #define CAN_OBJ_FLAGS_FILHIT_BITS	11
 #define CAN_OBJ_FLAGS_FILHIT_SHIFT	5
 #define CAN_OBJ_FLAGS_FILHIT_MASK				      \
-	GENMASK(CAN_FLAGS_SEQ_SHIFT + CAN_FLAGS_SEQ_BITS - 1, \
-		CAN_FLAGS_SEQ_SHIFT)
+	GENMASK(CAN_FLAGS_FILHIT_SHIFT + CAN_FLAGS_FILHIT_BITS - 1, \
+		CAN_FLAGS_FILHIT_SHIFT)
 
 struct mcp2517fd_obj_tef {
 	u32 id;
@@ -598,30 +598,8 @@ struct mcp2517fd_obj_rx {
 	u8 data[];
 };
 
-/* the prepared transmit spi message */
-struct mcp2517fd_obj_tx_msg {
-	int skb_idx;
-	unsigned int min_length;
-	struct {
-		struct spi_message msg;
-		struct spi_transfer xfer;
-		u16 cmd_addr;
-		u8 obj[sizeof(struct mcp2517fd_obj_tx)];
-		u8 payload[64];
-	} data;
-	struct {
-		struct spi_message msg;
-		struct spi_transfer xfer;
-		u16 cmd_addr;
-		u8 data;
-	} trigger;
-};
-
 #define FIFO_DATA(x)			(0x400 + (x))
 #define FIFO_DATA_SIZE			0x800
-
-#define RX_FIFO			       1
-#define TX_FIFO(i)		       (2+i)
 
 static const struct can_bittiming_const mcp2517fd_nominal_bittiming_const = {
 	.name		= DEVICE_NAME,
@@ -685,19 +663,22 @@ struct mcp2517fd_priv {
 	u8 payload_mode;
 
 	struct mutex txfifo_lock;
-	u8 tx_fifos;
-	u32 tx_pending_mask;
-	struct mcp2517fd_obj_tx_msg tx_msg[32];
 
 	u32 tef_address_start;
 	u32 tef_address_end;
 	u32 tef_address;
 
+	u32 fifo_address[32];
+
+	u8 tx_fifos;
+	u8 tx_fifo_start;
+	u32 tx_fifo_mask;
+	u32 tx_pending_mask;
+
 	u8 rx_fifos;
-	u32 rx_address_start;
-	u32 rx_address_inc;
-	u32 rx_address_end;
-	u32 rx_address;
+	u8 rx_fifo_depth;
+	u8 rx_fifo_start;
+	u32 rx_fifo_mask;
 
 	struct {
 		u32 intf;
@@ -943,44 +924,49 @@ static int mcp2517fd_cmd_write(struct spi_device *spi, u32 reg, u32 data,
 }
 
 static int mcp2517fd_transmit_message_common(
-	struct spi_device *spi, struct mcp2517fd_obj_tx_msg *msg,
+	struct spi_device *spi, int fifo,
 	struct mcp2517fd_obj_tx *obj, int len, u8 *data)
 {
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 addr = priv->fifo_address[fifo];
+	u8 d[2 + sizeof(*obj) + 64];
 	int ret;
 
-	/* transform to le32*/
+	/* add fifo as seq */
+	obj->flags |= fifo << CAN_OBJ_FLAGS_SEQ_SHIFT;
+
+	/* transform to le32 */
 	obj->id = cpu_to_le32(obj->id);
 	obj->flags = cpu_to_le32(obj->flags);
 
-	/* copy data to non-aligned - without leaking heap data */
-	memset(msg->data.payload, 0, sizeof(*msg->data.payload));
-	memcpy(msg->data.obj, obj, sizeof(*obj));
-	memcpy(msg->data.payload, data, len);
+	/* copy data to the right places- without leaking heap data */
+	memset(d, 0, sizeof(*d));
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE,addr, d);
+	memcpy(d + 2, obj, sizeof(*obj));
+	memcpy(d + 2 + sizeof(*obj), data, len);
 
 	/* transfers to FIFO RAM have to be multiple of 4 */
-	msg->data.xfer.len = msg->min_length + ALIGN(len, 4);
+	len = 2 + sizeof(*obj) + ALIGN(len, 4);
 
-	/*
-	 *  and submit async transfers
-	 * - surprizingly 2 separate work quicker than 1
-	 */
-	ret = spi_async(spi, &msg->data.msg);
-	dev_err(&spi->dev," spi_async: %i - %i", ret, msg->data.xfer.speed_hz);
+	/* fill the fifo */
+	ret = mcp2517fd_write(spi, d, len, priv->spi_speed_hz);
 	if (ret)
 		return NETDEV_TX_BUSY;
-	ret = spi_async(spi, &msg->trigger.msg);
-	dev_err(&spi->dev," spi_async: %i", ret);
+
+	/* and trigger it */
+	ret = mcp2517fd_cmd_write_mask(spi, CAN_FIFOCON(fifo),
+				       CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC,
+				       CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC,
+				       priv->spi_speed_hz);
 	if (ret)
 		return NETDEV_TX_BUSY;
 
 	return NETDEV_TX_OK;
 }
 
-static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int prio,
-				      struct canfd_frame *frame)
+static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
+					struct canfd_frame *frame)
 {
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	struct mcp2517fd_obj_tx_msg * msg = &priv->tx_msg[prio];
 	struct mcp2517fd_obj_tx obj;
 	int dlc = can_len2dlc(frame->len);
 
@@ -995,7 +981,6 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int prio,
 	}
 
 	obj.flags |= (dlc << CAN_OBJ_FLAGS_DLC_SHIFT) |
-		(prio << CAN_OBJ_FLAGS_SEQ_SHIFT) |
 		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
 		(frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0 |
 		(frame->flags & CANFD_BRS) ? CAN_OBJ_FLAGS_BRS : 0 |
@@ -1003,14 +988,12 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int prio,
 		CAN_OBJ_FLAGS_FDF;
 
 	return mcp2517fd_transmit_message_common(
-		spi, msg, &obj, frame->len, frame->data);
+		spi, fifo, &obj, frame->len, frame->data);
 }
 
-static int mcp2517fd_transmit_message(struct spi_device *spi, int prio,
+static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 				      struct can_frame *frame)
 {
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	struct mcp2517fd_obj_tx_msg * msg = &priv->tx_msg[prio];
 	struct mcp2517fd_obj_tx obj;
 
 	if (frame->can_dlc > 8)
@@ -1027,12 +1010,62 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int prio,
 	obj.flags |=
 		(frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT);
 	obj.flags |=
-		(prio << CAN_OBJ_FLAGS_SEQ_SHIFT) |
 		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
 		(frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
 
 	return mcp2517fd_transmit_message_common(
-		spi, msg, &obj, frame->can_dlc, frame->data);
+		spi, fifo, &obj, frame->can_dlc, frame->data);
+}
+
+static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
+					struct net_device *net)
+{
+        struct mcp2517fd_priv *priv = netdev_priv(net);
+        struct spi_device *spi = priv->spi;
+	int fifo;
+	int ret;
+
+	if (can_dropped_invalid_skb(net, skb))
+		return NETDEV_TX_OK;
+
+	/* decide on fifo to assign */
+	mutex_lock(&priv->txfifo_lock);
+	if (priv->tx_pending_mask) {
+		fifo = ffs(priv->tx_pending_mask) - 2;
+	} else {
+		fifo = priv->tx_fifo_start + priv->tx_fifos - 1;
+	}
+
+	/* disable the queue if we have reached the lowest priority fifo */
+	if (fifo <= priv->tx_fifo_start)
+		netif_stop_queue(net);
+
+	/* handle error - this should not happen... */
+	if (fifo < priv->tx_fifo_start) {
+		dev_err(&spi->dev,
+			"reached tx-fifo %i, which is not valid\n",
+			fifo);
+		mutex_unlock(&priv->txfifo_lock);
+		return NETDEV_TX_BUSY;
+	}
+
+	/* mark as pending */
+	priv->tx_pending_mask |= BIT(fifo);
+	mutex_unlock(&priv->txfifo_lock);
+
+	/* now process it for real */
+	if (can_is_canfd_skb(skb))
+		ret = mcp2517fd_transmit_fdmessage(
+			spi, fifo, (struct canfd_frame *)skb->data);
+	else
+		ret = mcp2517fd_transmit_message(
+			spi, fifo, (struct can_frame *)skb->data);
+
+	/* keep it for reference until the message really got transmitted */
+	if (ret == NETDEV_TX_OK)
+		can_put_echo_skb(skb, net, fifo);
+
+	return ret;
 }
 
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
@@ -1095,54 +1128,6 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 
 	return mcp2517fd_cmd_write(spi, CAN_DBTCFG, val,
 				   priv->spi_setup_speed_hz);
-}
-
-static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
-					struct net_device *net)
-{
-        struct mcp2517fd_priv *priv = netdev_priv(net);
-        struct spi_device *spi = priv->spi;
-	unsigned long prio;
-	int ret;
-
-	if (can_dropped_invalid_skb(net, skb))
-		return NETDEV_TX_OK;
-
-	dev_err(&spi->dev, "start_xmit:\n\tmask: %08x\n", priv->tx_pending_mask);
-
-	/* decide on fifo to assign */
-	mutex_lock(&priv->txfifo_lock);
-	prio = fls(priv->tx_pending_mask);
-	if (prio >= priv->tx_fifos) {
-		/* we should not get here - the queue should be disabled */
-		mutex_unlock(&priv->txfifo_lock);
-		return NETDEV_TX_BUSY;
-	}
-
-	/* mark as pending */
-	priv->tx_pending_mask |= BIT(prio);
-	mutex_unlock(&priv->txfifo_lock);
-
-	dev_err(&spi->dev, "\tprio: %lu of %i\n", prio, priv->tx_fifos);
-	dev_err(&spi->dev, "\tmask: %08x\n", priv->tx_pending_mask);
-
-	/* if we are the last one, then disable the queue */
-	if (prio == priv->tx_fifos - 1) {
-		netif_stop_queue(net);
-	}
-
-	/* now process it for real */
-	if (can_is_canfd_skb(skb))
-		ret = mcp2517fd_transmit_fdmessage(
-			spi, prio, (struct canfd_frame *)skb->data);
-	else
-		ret = mcp2517fd_transmit_message(
-			spi, prio, (struct can_frame *)skb->data);
-
-	/* keep it for reference until the message really got transmitted */
-	if (ret == NETDEV_TX_OK)
-		can_put_echo_skb(skb, net, prio);
-	return ret;
 }
 
 static void mcp2517fd_open_clean(struct net_device *net)
@@ -1363,55 +1348,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				struct spi_device *spi)
 {
 	u32 con_val = priv->con_val;
-	struct mcp2517fd_obj_tx_msg *msg;
 	u32 val;
 	int ret;
-	int i;
-
-	/* decide on TEF, tx and rx FIFOS */
-	switch (net->mtu) {
-	case CAN_MTU:
-		priv->payload_size = 8;
-		priv->payload_mode = CAN_TXQCON_PLSIZE_8;
-		priv->rx_fifos = 32;
-		priv->tx_fifos = 30;
-		priv->rx_address_inc = sizeof(struct mcp2517fd_obj_rx) + 8;
-		break;
-	case CANFD_MTU:
-		priv->payload_size = 64;
-		priv->payload_mode = CAN_TXQCON_PLSIZE_64;
-		priv->rx_fifos = 17;
-		priv->tx_fifos = 8;
-		priv->rx_address_inc = sizeof(struct mcp2517fd_obj_rx) + 64;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	/* set up TEF SIZE to the number of tx_fifos and IRQ */
-	ret = mcp2517fd_cmd_write(
-		spi, CAN_TEFCON,
-		CAN_TEFCON_FRESET |
-		CAN_TEFCON_TEFNEIE |
-		CAN_TEFCON_TEFTSEN |
-		((priv->tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT),
-		priv->spi_setup_speed_hz);
-	if (ret)
-		return ret;
-
-	/* now set up RX FIFO */
-	ret = mcp2517fd_cmd_write(
-		spi, CAN_FIFOCON(RX_FIFO),
-		(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
-		((priv->rx_fifos - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
-		CAN_FIFOCON_RXTSEN | /* RX timestamps */
-		CAN_FIFOCON_FRESET | /* reset FIFO */
-		CAN_FIFOCON_TFERFFIE | /* FIFO Full Interrupt enable */
-		CAN_FIFOCON_TFHRFHIE | /* FIFO Half full Interrupt enable */
-		CAN_FIFOCON_TFNRFNIE, /* FIFO not empty Interrupt enable */
-		priv->spi_setup_speed_hz);
-	if (ret)
-		return ret;
+	int i, fifo;
 
 	/* clear all filter */
 	for (i = 0; i < 32; i++) {
@@ -1429,30 +1368,108 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 			return ret;
 	}
 
-	/* and the RX filter that is required */
-	ret = mcp2517fd_cmd_write_mask(
-		spi, CAN_FLTCON(0),
-		CAN_FIFOCON_FLTEN(0) | (1 << CAN_FILCON_SHIFT(0)),
-		CAN_FILCON_MASK(0) | CAN_FIFOCON_FLTEN(0),
+	/* decide on TEF, tx and rx FIFOS */
+	switch (net->mtu) {
+	case CAN_MTU:
+		/* note: if we have INT1 connected to a GPIO
+		 * then we could handle this differently and more
+		 * efficiently
+		 */
+
+		/* mtu is 8 */
+		priv->payload_size = 8;
+		priv->payload_mode = CAN_TXQCON_PLSIZE_8;
+
+		/* 7 tx fifos starting at fifo 1 */
+		priv->tx_fifo_start = 1;
+		priv->tx_fifos = 7;
+
+		/* 24 rx fifos starting at fifo 8 with 2 buffers/fifo */
+		priv->rx_fifo_start = 8;
+		priv->rx_fifos = 24;
+		priv->rx_fifo_depth = 1;
+
+		break;
+	case CANFD_MTU:
+		/* wish there was a way to have hw filters
+		 * that can separate based on length ...
+		 */
+		/* MTU is 64 */
+		priv->payload_size = 64;
+		priv->payload_mode = CAN_TXQCON_PLSIZE_64;
+
+		/* 7 tx fifos starting at fifo 1 */
+		priv->tx_fifo_start = 1;
+		priv->tx_fifos = 7;
+
+		/* 19 rx fifos starting at fifo 8 with 1 buffer/fifo */
+		priv->rx_fifo_start = 8;
+		priv->rx_fifos = 19;
+		priv->rx_fifo_depth = 1;
+
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	/* set up TEF SIZE to the number of tx_fifos and IRQ */
+	ret = mcp2517fd_cmd_write(
+		spi, CAN_TEFCON,
+		CAN_TEFCON_FRESET |
+		CAN_TEFCON_TEFNEIE |
+		CAN_TEFCON_TEFTSEN |
+		((priv->tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT),
 		priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
-	/* now setup the TX FIFOS */
+	/* set up tx fifos */
 	for (i = 0; i < priv->tx_fifos; i++) {
+		fifo = priv->tx_fifo_start + i;
 		ret = mcp2517fd_cmd_write(
-			spi, CAN_FIFOCON(TX_FIFO(i)),
+			spi, CAN_FIFOCON(fifo),
 			CAN_FIFOCON_FRESET | /* reset FIFO */
 			(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
 			(0 << CAN_FIFOCON_FSIZE_SHIFT) | /* 1 FIFO only */
-			((i) << CAN_FIFOCON_TXPRI_SHIFT) | /* priority */
+			(fifo << CAN_FIFOCON_TXPRI_SHIFT) | /* priority */
 			CAN_FIFOCON_TXEN,
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
+		priv->tx_fifo_mask |= BIT(fifo);
 	}
 
-	/* we need to move out of CONFIG mode shortly to get pointers */
+	/* now set up RX FIFO */
+	for (i = 0; i < priv->rx_fifos; i++) {
+		fifo = priv->rx_fifo_start + i;
+		/* prepare the fifo itself */
+		ret = mcp2517fd_cmd_write(
+			spi, CAN_FIFOCON(fifo),
+			(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
+			((priv->rx_fifo_depth) << CAN_FIFOCON_FSIZE_SHIFT) |
+			CAN_FIFOCON_RXTSEN | /* RX timestamps */
+			CAN_FIFOCON_FRESET | /* reset FIFO */
+			CAN_FIFOCON_TFERFFIE | /* FIFO Full */
+			CAN_FIFOCON_TFHRFHIE | /* FIFO Half Full*/
+			CAN_FIFOCON_TFNRFNIE, /* FIFO not empty */
+			priv->spi_setup_speed_hz);
+		if (ret)
+			return ret;
+		/* prepare the rx filter config: filter i directs to fifo
+		 * FLTMSK and FLTOBJ are 0 already, so they map everything
+		 */
+		ret = mcp2517fd_cmd_write_mask(
+			spi, CAN_FLTCON(i),
+			CAN_FIFOCON_FLTEN(i) | (fifo << CAN_FILCON_SHIFT(i)),
+			CAN_FIFOCON_FLTEN(i) | CAN_FILCON_MASK(i),
+			priv->spi_setup_speed_hz);
+		if (ret)
+			return ret;
+
+		priv->rx_fifo_mask |= BIT(fifo);
+	}
+
+	/* we need to move out of CONFIG mode shortly to get the addresses */
 	ret = mcp2517fd_cmd_write(
 		spi, CAN_CON, con_val |
 		(CAN_CON_MODE_INTERNAL_LOOPBACK << CAN_CON_REQOP_SHIFT),
@@ -1460,65 +1477,45 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	if (ret)
 		return ret;
 
-	/* get all the relevant addresses for the transmit fifos */
-	for (i = priv->tx_fifos - 1; i >= 0; i--) {
-		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(TX_FIFO(i)),
-					 &val, priv->spi_setup_speed_hz);
-		if (ret)
-			return ret;
-		/* normalize val to RAM address */
-		val = FIFO_DATA(val);
-		/* assign as rx_address_end - we go top to buttom, so its ok */
-		priv->rx_address_end = val;
-
-		/* clear tx messages */
-		msg = &priv->tx_msg[i];
-		memset(msg, 0, sizeof(msg));
-		/* prepare the spi messages to submit to fifo */
-		spi_message_init_with_transfers(
-			&msg->data.msg, &msg->data.xfer, 1);
-		msg->data.xfer.tx_buf = &msg->data.cmd_addr;
-		msg->min_length = sizeof(msg->data.cmd_addr) +
-			sizeof(msg->data.obj);
-		mcp2517fd_calc_cmd_addr(
-			INSTRUCTION_WRITE, val,
-			(u8 *)&msg->data.cmd_addr);
-		/* and the trigger */
-		spi_message_init_with_transfers(
-			&msg->trigger.msg, &msg->trigger.xfer, 1);
-		msg->trigger.xfer.tx_buf = &msg->trigger.cmd_addr;
-		msg->trigger.xfer.len = 3;
-		mcp2517fd_calc_cmd_addr(
-			INSTRUCTION_WRITE, CAN_FIFOCON(TX_FIFO(i)) + 1,
-			(u8 *)&msg->trigger.cmd_addr);
-		msg->trigger.data =
-			(CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC) >> 8;
-
-		dev_err(&spi->dev," TX-FIFO%02i: %04x\n",
-			i, val);
-	}
-
-	/* for the rx fifo */
-	ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(RX_FIFO), &val,
-				 priv->spi_setup_speed_hz);
-	if (ret)
-		return ret;
-	val = FIFO_DATA(val);
-	priv->rx_address_start = val;
-	priv->rx_address = val;
-	dev_err(&spi->dev," RX-FIFO: %03x - %03x\n",
-		priv->rx_address, priv->rx_address_end);
-
 	/* for the TEF fifo */
 	ret = mcp2517fd_cmd_read(spi, CAN_TEFUA, &val,
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-	priv->tef_address_start = 0x400 + val;
-	priv->tef_address = 0x400 + val;
-	priv->tef_address_end = priv->rx_address_start;
+	priv->tef_address = FIFO_DATA(val);
+	priv->tef_address_start = FIFO_DATA(val);
+	priv->tef_address_end = priv->tef_address_start +
+		(priv->tx_fifos + 1) * sizeof(struct mcp2517fd_obj_tef) -
+		1;
 	dev_err(&spi->dev," TEF-FIFO: %03x - %03x\n",
-		priv->tef_address, priv->tef_address_end);
+		priv->tef_address_start, priv->tef_address_end);
+
+	/* get all the relevant addresses for the transmit fifos */
+	for (i = 0; i < priv->tx_fifos; i++) {
+		fifo = priv->tx_fifo_start + i;
+		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(fifo),
+					 &val, priv->spi_setup_speed_hz);
+		if (ret)
+			return ret;
+		/* normalize val to RAM address */
+		priv->fifo_address[fifo] = FIFO_DATA(val);
+
+		dev_err(&spi->dev," TX-FIFO%02i: %04x\n",
+			fifo, priv->fifo_address[fifo]);
+	}
+
+	for (i = 0; i < priv->rx_fifos; i++) {
+		fifo = priv->rx_fifo_start + i;
+		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(fifo),
+					 &val, priv->spi_setup_speed_hz);
+		if (ret)
+			return ret;
+		/* normalize val to RAM address */
+		priv->fifo_address[fifo] = FIFO_DATA(val);
+
+		dev_err(&spi->dev," RX-FIFO%02i: %04x\n",
+			fifo, priv->fifo_address[fifo]);
+	}
 
 	/* now get back into config mode */
 	ret = mcp2517fd_cmd_write(
@@ -1658,14 +1655,44 @@ static int mcp2517fd_setup(struct net_device *net,
 static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_obj_tef tef;
+	u32 mask = 0;
+	int i, count, ret, fifo;
 
-	/* */
-	dev_err(&spi->dev, "Reset_TEF\n");
-	return mcp2517fd_cmd_write_mask(spi,
+	/* calculate the number of fifos that have been processed */
+	mutex_lock(&priv->txfifo_lock);
+	count = hweight_long(priv->tx_pending_mask);
+	mutex_unlock(&priv->txfifo_lock);
+	count -= hweight_long(priv->status.txreq);
+
+	/* now clear TEF for each */
+	for(i = 0; i < count; i++) {
+		ret = mcp2517fd_cmd_readn(spi, priv->tef_address,
+					  &tef, sizeof(tef),
+					  priv->spi_speed_hz);
+		ret = mcp2517fd_cmd_write_mask(spi,
 					CAN_TEFCON,
-					CAN_TEFCON_FRESET,
-					CAN_TEFCON_FRESET,
+					CAN_TEFCON_UINC,
+					CAN_TEFCON_UINC,
 					priv->spi_speed_hz);
+		/* and release it */
+		fifo = (tef.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
+			CAN_OBJ_FLAGS_SEQ_SHIFT;
+		can_get_echo_skb(priv->net, fifo);
+
+		/* increment tef */
+		priv->tef_address += sizeof(tef);
+		if (priv->tef_address > priv->tef_address_end)
+			priv->tef_address = priv->tef_address_start;
+
+		/* and set mask */
+		mask |= BIT(fifo);
+	}
+
+	/* release fifos for the future */
+	mutex_lock(&priv->txfifo_lock);
+	priv->tx_pending_mask &= ~mask;
+	mutex_unlock(&priv->txfifo_lock);
 
 	return 0;
 }
@@ -1692,7 +1719,7 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 {
 	struct mcp2517fd_priv *priv = dev_id;
 	struct spi_device *spi = priv->spi;
-	struct net_device *net = priv->net;
+	//struct net_device *net = priv->net;
 	int ret;
 
 	while (!priv->force_quit) {
@@ -1702,7 +1729,7 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 					  priv->spi_speed_hz);
 		if (ret)
 			return ret;
-
+#if 0
 		dev_err(&spi->dev,"irq: intf:\t0x%08x\n", priv->status.intf);
 		dev_err(&spi->dev,"irq: txif:\t0x%08x\n", priv->status.txif);
 		dev_err(&spi->dev,"irq: txreq:\t0x%08x\n", priv->status.txreq);
@@ -1713,7 +1740,7 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 		dev_err(&spi->dev,"irq: trec:\t0x%08x\n", priv->status.trec);
 		dev_err(&spi->dev,"irq: bdiag0:\t0x%08x\n", priv->status.bdiag0);
 		dev_err(&spi->dev,"irq: bdiag1:\t0x%08x\n", priv->status.bdiag1);
-
+#endif
 		if ((priv->status.intf &
 		     (priv->status.intf >> CAN_INT_IE_SHIFT)) == 0)
 			break;
