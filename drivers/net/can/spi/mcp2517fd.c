@@ -680,6 +680,108 @@ struct mcp2517fd_priv {
 	struct clk *clk;
 };
 
+static int mcp2517fd_sync_transfer(struct spi_device *spi,
+				 struct spi_transfer *xfer,
+				 unsigned int xfers,
+				 int speed_hz)
+{
+	int i;
+
+	for(i = 0; i < xfers; i++)
+		xfer[i].speed_hz = speed_hz;
+
+	return spi_sync_transfer(spi, xfer, xfers);
+}
+
+#define MCP2517FD_BUFFER_TXRX_SIZE 2048
+
+static int mcp2517fd_write_then_read(struct spi_device *spi,
+				     const void* tx_buf,
+				     unsigned int tx_len,
+				     void* rx_buf,
+				     unsigned int rx_len,
+				     int speed_hz)
+{
+	static u8 *txrx;
+	struct spi_transfer xfer[2];
+	int ret;
+
+	memset(xfer,0, sizeof(*xfer));
+
+	/* when using a halfduplex controller or to big for buffer */
+	if (spi->master->flags & SPI_MASTER_HALF_DUPLEX) {
+		xfer[0].tx_buf = tx_buf;
+		xfer[0].len = tx_len;
+
+		xfer[1].rx_buf = rx_buf;
+		xfer[1].len = rx_len;
+
+		return mcp2517fd_sync_transfer(spi, xfer, 2, speed_hz);
+	}
+
+	txrx = kmalloc(MCP2517FD_BUFFER_TXRX_SIZE * 2, GFP_KERNEL | GFP_DMA);
+	if (! txrx)
+		return -ENOMEM;
+
+	/* full duplex optimization */
+	xfer[0].tx_buf = txrx;
+	xfer[0].rx_buf = txrx + MCP2517FD_BUFFER_TXRX_SIZE;
+	xfer[0].len = tx_len + rx_len;
+
+	/* copy and clean */
+	memcpy(txrx, tx_buf, tx_len);
+	memset(txrx + tx_len, 0, rx_len);
+
+	ret = mcp2517fd_sync_transfer(spi, xfer, 1, speed_hz);
+
+	if (!ret)
+		memcpy(rx_buf, xfer[0].rx_buf + tx_len, rx_len);
+
+	kfree(txrx);
+
+	return ret;
+}
+
+static int mcp2517fd_write(struct spi_device *spi,
+			   const void* tx_buf,
+			   unsigned int tx_len,
+			   int speed_hz)
+{
+	struct spi_transfer xfer;
+
+	memset(&xfer,0, sizeof(xfer));
+	xfer.tx_buf = tx_buf;
+	xfer.len = tx_len;
+
+	return mcp2517fd_sync_transfer(spi, &xfer, 1, speed_hz);
+}
+
+
+static int mcp2517fd_write_then_write(struct spi_device *spi,
+				     const void* tx_buf,
+				     unsigned int tx_len,
+				     void* tx2_buf,
+				     unsigned int tx2_len,
+				     int speed_hz)
+{
+	static u8 *txrx;
+	struct spi_transfer xfer;
+	int ret;
+
+	txrx = kmalloc(tx_len + tx2_len, GFP_KERNEL | GFP_DMA);
+	if (! txrx)
+		return -ENOMEM;
+
+	memset(&xfer,0, sizeof(xfer));
+	xfer.len = tx_len + tx2_len;
+	xfer.tx_buf = txrx;
+
+	memcpy(txrx, tx_buf, tx_len);
+	memcpy(txrx + tx_len, tx2_buf, tx2_len);
+
+	return mcp2517fd_sync_transfer(spi, &xfer, 1, speed_hz);
+}
+
 static void mcp2517fd_calc_cmd_addr(u16 cmd, u16 addr, u8 *data)
 {
 	cmd = cmd | (addr & ADDRESS_MASK);
