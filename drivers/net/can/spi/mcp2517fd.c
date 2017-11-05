@@ -790,17 +790,30 @@ static void mcp2517fd_calc_cmd_addr(u16 cmd, u16 addr, u8 *data)
 
 static int mcp2517fd_cmd_reset(struct spi_device *spi, u32 speed_hz)
 {
-	u8 tx_buf[2];
+	u8 cmd[2];
 
-	mcp2517fd_calc_cmd_addr(INSTRUCTION_RESET, 0, tx_buf);
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_RESET, 0, cmd);
 
 	/* write the reset command */
-	return mcp2517fd_write(spi, tx_buf, 2, speed_hz);
+	return mcp2517fd_write(spi, cmd, 2, speed_hz);
 }
 
-/*
-#define DEBUG
-*/
+/* read multiple bytes, transform some registers */
+static int mcp2517fd_cmd_readn(struct spi_device *spi, u32 reg, u8 *data,
+			       int n, u32 speed_hz)
+{
+	u8 cmd[2];
+	int ret;
+
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg + first_byte, cmd);
+
+	ret = mcp2517fd_write_then_read(spi, &cmd, 2, data, n, speed_hz);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
 
 /* read a register, but we are only interrested in a few bytes */
 static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
@@ -819,15 +832,10 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 	last_byte = (fls(mask) - 1)  >> 3;
 	len_byte = last_byte - first_byte +1;
 
-	/* prepare command */
-	mcp2517fd_calc_cmd_addr(INSTRUCTION_READ, reg + first_byte, cmd);
-
 	*data = 0;
-	ret = mcp2517fd_write_then_read(spi,
-					&cmd, 2,
-					((void *)data + first_byte),
-					len_byte,
-					speed_hz);
+	ret=mcp2517fd_cmd_readn(spi, reg,
+				((void *)data + first_byte), len_byte,
+				speed_hz);
 	if (ret)
 		return ret;
 
