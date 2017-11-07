@@ -579,6 +579,9 @@
 	GENMASK(CAN_FLAGS_FILHIT_SHIFT + CAN_FLAGS_FILHIT_BITS - 1, \
 		CAN_FLAGS_FILHIT_SHIFT)
 
+#define MCP2517FD_BUFFER_TXRX_SIZE 2048
+
+
 struct mcp2517fd_obj_tef {
 	u32 id;
 	u32 flags;
@@ -710,6 +713,8 @@ struct mcp2517fd_priv {
 	struct regulator *power;
 	struct regulator *transceiver;
 	struct clk *clk;
+	/* this should be sufficiently aligned - no idea how to force an u32 alignment here... */
+	u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
 };
 
 static int mcp2517fd_sync_transfer(struct spi_device *spi,
@@ -724,8 +729,6 @@ static int mcp2517fd_sync_transfer(struct spi_device *spi,
 
 	return spi_sync_transfer(spi, xfer, xfers);
 }
-
-#define MCP2517FD_BUFFER_TXRX_SIZE 2048
 
 static int mcp2517fd_write_then_read(struct spi_device *spi,
 				     const void* tx_buf,
@@ -1539,7 +1542,7 @@ static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 {
 	return mcp2517fd_cmd_write(spi, CAN_INT,
 				   CAN_INT_TEFIE |
-0*				   CAN_INT_RXIE,
+				   CAN_INT_RXIE,
 				   speed_hz);
 }
 
@@ -1652,9 +1655,165 @@ static int mcp2517fd_setup(struct net_device *net,
 					   priv->spi_setup_speed_hz);
 }
 
+static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
+					 struct mcp2517fd_obj_rx *rx)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct canfd_frame *frame;
+	struct sk_buff *skb;
+
+	/* allocate the skb buffer */
+	skb = alloc_canfd_skb(priv->net, &frame);
+        if (!skb) {
+                dev_err(&spi->dev, "cannot allocate RX skb\n");
+                priv->net->stats.rx_dropped++;
+                return -ENOMEM;
+        }
+
+	frame->flags = 0;
+
+	frame->can_id = rx->id;
+	/* MISSING: RTR  and other checks */
+
+	frame->len = can_dlc2len((rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
+				 >> CAN_OBJ_FLAGS_DLC_SHIFT);
+
+	memcpy(frame->data, rx->data, frame->len);
+
+	priv->net->stats.rx_packets++;
+        priv->net->stats.rx_bytes += frame->len;
+
+        can_led_event(priv->net, CAN_LED_EVENT_RX);
+
+        netif_rx_ni(skb);
+
+	return 0;
+}
+
+static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
+					     struct mcp2517fd_obj_rx *rx)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct sk_buff *skb;
+	struct can_frame *frame;
+	int len;
+
+	/* allocate the skb buffer */
+	skb = alloc_can_skb(priv->net, &frame);
+        if (!skb) {
+                dev_err(&spi->dev, "cannot allocate RX skb\n");
+                priv->net->stats.rx_dropped++;
+                return -ENOMEM;
+        }
+
+	frame->can_id = rx->id;
+	/* MISSING: RTR  and other checks */
+
+	frame->can_dlc = (rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
+		>> CAN_OBJ_FLAGS_DLC_SHIFT;
+
+	len = can_dlc2len(frame->can_dlc);
+
+	memcpy(frame->data, rx->data, len);
+
+	priv->net->stats.rx_packets++;
+        priv->net->stats.rx_bytes += len;
+
+        can_led_event(priv->net, CAN_LED_EVENT_RX);
+
+        netif_rx_ni(skb);
+
+	return 0;
+}
+
+
+static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
+					   int fifo)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_obj_rx *rx;
+	int ret;
+
+	/* calc the buffer address */
+	rx = (struct mcp2517fd_obj_rx *)(priv->fifo_data +
+					 priv->fifo_address[fifo] -
+					 FIFO_DATA(0));
+
+	/* transform the data to system byte order */
+	rx->id = le32_to_cpu(rx->id);
+	rx->flags = le32_to_cpu(rx->flags);
+	rx->ts = le32_to_cpu(rx->ts);
+
+	/* clear the fifo */
+	ret = mcp2517fd_cmd_write_mask(
+		spi, CAN_FIFOCON(fifo),
+		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET,
+		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET,
+		priv->spi_speed_hz);
+	if (ret)
+		return ret;
+
+	/* submit the fifo to the network stack */
+	dev_err(&spi->dev,"Received message in fifo %i - %x %08x\n", fifo, rx->id, rx->flags);
+	if (priv->can.ctrlmode & CAN_CTRLMODE_FD)
+		return mcp2517fd_can_transform_rx_fd(spi, rx);
+	else
+		return mcp2517fd_can_transform_rx_normal(spi, rx);
+}
+
+static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 mask = priv->status.rxif;
+	u32 fifo_size = sizeof(struct mcp2517fd_obj_rx) +
+		(priv->can.ctrlmode & CAN_CTRLMODE_FD) ? 64 : 8;
+	int i, j;
+	int ret;
+
+	if (!mask)
+		return 0;
+
+	/* read all the "open" segments in big chunks */
+	for(i = priv->rx_fifo_start ;
+	    i < priv->rx_fifo_start + priv->rx_fifos;
+	    i++) {
+		if (mask & BIT(i)) {
+			/* find the last set bit in sequence */
+			for(j = i ;
+			    (j < priv->rx_fifo_start + priv->rx_fifos) &&
+				    (mask & BIT(j));
+			    j++) {
+				mask &= ~BIT(j);
+			}
+
+			/* now we got start and end, so read the range */
+			ret = mcp2517fd_cmd_readn(
+				spi, priv->fifo_address[i],
+				priv->fifo_data + priv->fifo_address[i] -
+				FIFO_DATA(0),
+				(j - i) * fifo_size,
+				priv->spi_speed_hz);
+			if (ret)
+				return ret;
+
+			/* now handle those messages */
+			for (; i < j ; i++) {
+				ret = mcp2517fd_can_ist_handle_rxfifo(
+					spi, i);
+				if (ret)
+					return ret;
+			}
+		}
+	}
+
+	return 0;
+}
+
+
 static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
 	struct mcp2517fd_obj_tef tef;
 	u32 mask = 0;
 	int i, count, ret, fifo;
@@ -1687,6 +1846,10 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 
 		/* and set mask */
 		mask |= BIT(fifo);
+
+		net->stats.tx_packets++;
+		net->stats.tx_bytes += 0/* TODO */;
+		can_led_event(net, CAN_LED_EVENT_TX);
 	}
 
 	/* release fifos for the future */
@@ -1701,6 +1864,13 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	int ret;
+
+	/* handle the rx */
+	if (priv->status.intf & CAN_INT_RXIF) {
+		ret = mcp2517fd_can_ist_handle_rxif(spi);
+		if (ret)
+			return ret;
+	}
 
 	/* handle the tef */
 	if (priv->status.intf & CAN_INT_TEFIF) {
