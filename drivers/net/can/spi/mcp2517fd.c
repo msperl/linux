@@ -946,7 +946,7 @@ static int mcp2517fd_transmit_message_common(
 	struct mcp2517fd_obj_tx *obj, int len, u8 *data)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u32 addr = priv->fifo_address[fifo];
+	u32 addr = FIFO_DATA(priv->fifo_address[fifo]);
 	u8 d[2 + sizeof(*obj) + 64];
 	int ret;
 
@@ -1295,7 +1295,11 @@ static int mcp2517fd_set_normal_mode(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	dev_err(&spi->dev, "TODO: mcp2517fd_set_normal_mode");
+	dev_err(&spi->dev, "TODO: mcp2517fd_set_normal_mode - %i\n", type);
+
+	dev_err(&spi->dev, "  CanCTRL: %i\n",
+		(priv->can.ctrlmode & CAN_CTRLMODE_FD));
+
 	return 0;
 }
 
@@ -1505,8 +1509,8 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-	priv->tef_address = FIFO_DATA(val);
-	priv->tef_address_start = FIFO_DATA(val);
+	priv->tef_address = val;
+	priv->tef_address_start = val;
 	priv->tef_address_end = priv->tef_address_start +
 		(priv->tx_fifos + 1) * sizeof(struct mcp2517fd_obj_tef) -
 		1;
@@ -1521,7 +1525,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		if (ret)
 			return ret;
 		/* normalize val to RAM address */
-		priv->fifo_address[fifo] = FIFO_DATA(val);
+		priv->fifo_address[fifo] = val;
 
 		dev_err(&spi->dev," TX-FIFO%02i: %04x\n",
 			fifo, priv->fifo_address[fifo]);
@@ -1533,8 +1537,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 					 &val, priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-		/* normalize val to RAM address */
-		priv->fifo_address[fifo] = FIFO_DATA(val);
+		priv->fifo_address[fifo] = val;
 
 		dev_err(&spi->dev," RX-FIFO%02i: %04x\n",
 			fifo, priv->fifo_address[fifo]);
@@ -1769,8 +1772,7 @@ static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
 
 	/* calc the buffer address */
 	rx = (struct mcp2517fd_obj_rx *)(priv->fifo_data +
-					 priv->fifo_address[fifo] -
-					 FIFO_DATA(0));
+					 priv->fifo_address[fifo]);
 
 	/* transform the data to system byte order */
 	rx->id = le32_to_cpu(rx->id);
@@ -1787,7 +1789,6 @@ static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
 		return ret;
 
 	/* submit the fifo to the network stack */
-	dev_err(&spi->dev,"Received message in fifo %i - %x %08x\n", fifo, rx->id, rx->flags);
 	if (rx->flags & CAN_OBJ_FLAGS_FDF)
 		return mcp2517fd_can_transform_rx_fd(spi, rx);
 	else
@@ -1799,7 +1800,7 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	u32 mask = priv->status.rxif;
 	u32 fifo_size = sizeof(struct mcp2517fd_obj_rx) +
-		(priv->can.ctrlmode & CAN_CTRLMODE_FD) ? 64 : 8;
+		((priv->can.ctrlmode & CAN_CTRLMODE_FD) ? 64 : 8);
 	int i, j;
 	int ret;
 
@@ -1821,9 +1822,8 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 
 			/* now we got start and end, so read the range */
 			ret = mcp2517fd_cmd_readn(
-				spi, priv->fifo_address[i],
-				priv->fifo_data + priv->fifo_address[i] -
-				FIFO_DATA(0),
+				spi, FIFO_DATA(priv->fifo_address[i]),
+				priv->fifo_data + priv->fifo_address[i],
 				(j - i) * fifo_size,
 				priv->spi_speed_hz);
 			if (ret)
@@ -1859,7 +1859,8 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 
 	/* now clear TEF for each */
 	for(i = 0; i < count; i++) {
-		ret = mcp2517fd_cmd_readn(spi, priv->tef_address,
+		ret = mcp2517fd_cmd_readn(spi,
+					  FIFO_DATA(priv->tef_address),
 					  &tef, sizeof(tef),
 					  priv->spi_speed_hz);
 		ret = mcp2517fd_cmd_write_mask(spi,
