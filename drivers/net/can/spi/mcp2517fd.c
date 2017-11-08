@@ -967,6 +967,22 @@ static int mcp2517fd_transmit_message_common(
 	return NETDEV_TX_OK;
 }
 
+static void mcp2517fd_canid_to_mcpid(u32 can_id, u32 *id, u32 *flags)
+{
+	if (can_id & CAN_EFF_FLAG) {
+		/* mapping is diffent*/
+		*id = ((can_id & CAN_SFF_MASK) << 11) |
+			(can_id & CAN_EFF_MASK) >> 18;
+
+		*flags = CAN_OBJ_FLAGS_IDE;
+	} else {
+		*id = can_id & CAN_SFF_MASK;
+		*flags = 0;
+	}
+
+	*flags |= (can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+}
+
 static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 					struct canfd_frame *frame)
 {
@@ -975,13 +991,9 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 
 	frame->len = can_dlc2len(dlc);
 
-	if (frame->can_id & CAN_EFF_FLAG) {
-		obj.id = frame->can_id & CAN_EFF_MASK;
-		obj.flags = CAN_OBJ_FLAGS_IDE;
-	} else {
-		obj.id = frame->can_id & CAN_SFF_MASK;
-		obj.flags = 0;
-	}
+	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.id, &obj.flags);
+
+	dev_err(&spi->dev, "TransmitFD: %08x => %08x\n", frame->can_id, obj.id);
 
 	obj.flags |= (dlc << CAN_OBJ_FLAGS_DLC_SHIFT) |
 		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
@@ -1002,13 +1014,8 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 	if (frame->can_dlc > 8)
 		frame->can_dlc = 8;
 
-	if (frame->can_id & CAN_EFF_FLAG) {
-		obj.id = frame->can_id & CAN_EFF_MASK;
-		obj.flags = CAN_OBJ_FLAGS_IDE;
-	} else {
-		obj.id = frame->can_id & CAN_SFF_MASK;
-		obj.flags = 0;
-	}
+	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.id, &obj.flags);
+	dev_err(&spi->dev, "Transmit: %08x => %08x\n", frame->can_id, obj.id);
 
 	obj.flags |=
 		(frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT);
