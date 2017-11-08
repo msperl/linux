@@ -548,14 +548,14 @@
 
 #define CAN_OBJ_ID_SID_BITS		11
 #define CAN_OBJ_ID_SID_SHIFT		0
-#define CAN_OBJ_ID_SID_MASK				\
-	GENMASK(CAN_ID_SID_SHIFT + CAN_ID_SID_BITS - 1, \
-		CAN_ID_SID_SHIFT)
+#define CAN_OBJ_ID_SID_MASK					\
+	GENMASK(CAN_OBJ_ID_SID_SHIFT + CAN_OBJ_ID_SID_BITS - 1, \
+		CAN_OBJ_ID_SID_SHIFT)
 #define CAN_OBJ_ID_EID_BITS		18
 #define CAN_OBJ_ID_EID_SHIFT		11
-#define CAN_OBJ_ID_EID_MASK				\
-	GENMASK(CAN_ID_EID_SHIFT + CAN_ID_EID_BITS - 1, \
-		CAN_ID_EID_SHIFT)
+#define CAN_OBJ_ID_EID_MASK					\
+	GENMASK(CAN_OBJ_ID_EID_SHIFT + CAN_OBJ_ID_EID_BITS - 1, \
+		CAN_OBJ_ID_EID_SHIFT)
 #define CAN_OBJ_ID_SID_BIT11		BIT(29)
 
 #define CAN_OBJ_FLAGS_DLC_BITS		4
@@ -580,6 +580,19 @@
 		CAN_FLAGS_FILHIT_SHIFT)
 
 #define MCP2517FD_BUFFER_TXRX_SIZE 2048
+
+/* ideally these would be defined in uapi/linux/can.h */
+#define CAN_EFF_SID_SHIFT	(CAN_EFF_ID_BITS - CAN_SFF_ID_BITS)
+#define CAN_EFF_SID_BITS	CAN_SFF_ID_BITS
+#define CAN_EFF_SID_MASK				      \
+	GENMASK(CAN_EFF_SID_SHIFT + CAN_EFF_SID_BITS - 1,     \
+		CAN_EFF_SID_SHIFT)
+#define CAN_EFF_EID_SHIFT	0
+#define CAN_EFF_EID_BITS	CAN_EFF_SID_SHIFT
+#define CAN_EFF_EID_MASK				      \
+	GENMASK(CAN_EFF_EID_SHIFT + CAN_EFF_EID_BITS - 1,     \
+		CAN_EFF_EID_SHIFT)
+
 
 
 struct mcp2517fd_obj_tef {
@@ -715,6 +728,8 @@ struct mcp2517fd_priv {
 	struct clk *clk;
 	/* this should be sufficiently aligned - no idea how to force an u32 alignment here... */
 	u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
+	u8 spi_tx[MCP2517FD_BUFFER_TXRX_SIZE];
+	u8 spi_rx[MCP2517FD_BUFFER_TXRX_SIZE];
 };
 
 static int mcp2517fd_sync_transfer(struct spi_device *spi,
@@ -970,10 +985,10 @@ static int mcp2517fd_transmit_message_common(
 static void mcp2517fd_canid_to_mcpid(u32 can_id, u32 *id, u32 *flags)
 {
 	if (can_id & CAN_EFF_FLAG) {
-		/* mapping is diffent*/
-		*id = ((can_id & CAN_SFF_MASK) << 11) |
-			(can_id & CAN_EFF_MASK) >> 18;
-
+		int sid = (can_id & CAN_EFF_SID_MASK) >> CAN_EFF_SID_SHIFT;
+		int eid = (can_id & CAN_EFF_EID_MASK) >> CAN_EFF_EID_SHIFT;
+		*id = (eid << CAN_OBJ_ID_EID_SHIFT) |
+			(sid << CAN_OBJ_ID_SID_SHIFT);
 		*flags = CAN_OBJ_FLAGS_IDE;
 	} else {
 		*id = can_id & CAN_SFF_MASK;
@@ -995,12 +1010,12 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 
 	dev_err(&spi->dev, "TransmitFD: %08x => %08x\n", frame->can_id, obj.id);
 
-	obj.flags |= (dlc << CAN_OBJ_FLAGS_DLC_SHIFT) |
-		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
-		(frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0 |
-		(frame->flags & CANFD_BRS) ? CAN_OBJ_FLAGS_BRS : 0 |
-		(frame->flags & CANFD_ESI) ? CAN_OBJ_FLAGS_ESI : 0 |
-		CAN_OBJ_FLAGS_FDF;
+	obj.flags |= dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
+	obj.flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
+	obj.flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+	obj.flags |= (frame->flags & CANFD_BRS) ? CAN_OBJ_FLAGS_BRS : 0;
+	obj.flags |= (frame->flags & CANFD_ESI) ? CAN_OBJ_FLAGS_ESI : 0;
+	obj.flags |= CAN_OBJ_FLAGS_FDF;
 
 	return mcp2517fd_transmit_message_common(
 		spi, fifo, &obj, frame->len, frame->data);
@@ -1017,11 +1032,9 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.id, &obj.flags);
 	dev_err(&spi->dev, "Transmit: %08x => %08x\n", frame->can_id, obj.id);
 
-	obj.flags |=
-		(frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT);
-	obj.flags |=
-		(frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0 |
-		(frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+	obj.flags |= frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
+	obj.flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
+	obj.flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
 
 	return mcp2517fd_transmit_message_common(
 		spi, fifo, &obj, frame->can_dlc, frame->data);
@@ -1662,6 +1675,21 @@ static int mcp2517fd_setup(struct net_device *net,
 					   priv->spi_setup_speed_hz);
 }
 
+static void mcp2517fd_mcpid_to_canid(u32 mcpid, u32 mcpflags, u32 *id)
+{
+	u32 sid = (mcpid & CAN_OBJ_ID_SID_MASK) >> CAN_OBJ_ID_SID_SHIFT;
+	u32 eid = (mcpid & CAN_OBJ_ID_EID_MASK) >> CAN_OBJ_ID_EID_SHIFT;
+	if (mcpflags & CAN_OBJ_FLAGS_IDE) {
+		*id = (eid << CAN_EFF_EID_SHIFT) |
+			(sid << CAN_EFF_SID_SHIFT) |
+			CAN_EFF_FLAG;
+	} else {
+		*id = sid;
+	}
+
+	*id |= (mcpflags & CAN_OBJ_FLAGS_RTR) ? CAN_RTR_FLAG : 0;
+}
+
 static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 					 struct mcp2517fd_obj_rx *rx)
 {
@@ -1677,10 +1705,9 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
                 return -ENOMEM;
         }
 
-	frame->flags = 0;
-
-	frame->can_id = rx->id;
-	/* MISSING: RTR  and other checks */
+	mcp2517fd_mcpid_to_canid(rx->id, rx->flags, &frame->can_id);
+	frame->flags |= (rx->flags & CAN_OBJ_FLAGS_BRS) ? CANFD_BRS : 0;
+	frame->flags |= (rx->flags & CAN_OBJ_FLAGS_ESI) ? CANFD_ESI : 0;
 
 	frame->len = can_dlc2len((rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
 				 >> CAN_OBJ_FLAGS_DLC_SHIFT);
@@ -1713,8 +1740,7 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
                 return -ENOMEM;
         }
 
-	frame->can_id = rx->id;
-	/* MISSING: RTR  and other checks */
+	mcp2517fd_mcpid_to_canid(rx->id, rx->flags, &frame->can_id);
 
 	frame->can_dlc = (rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
 		>> CAN_OBJ_FLAGS_DLC_SHIFT;
@@ -1762,7 +1788,7 @@ static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
 
 	/* submit the fifo to the network stack */
 	dev_err(&spi->dev,"Received message in fifo %i - %x %08x\n", fifo, rx->id, rx->flags);
-	if (priv->can.ctrlmode & CAN_CTRLMODE_FD)
+	if (rx->flags & CAN_OBJ_FLAGS_FDF)
 		return mcp2517fd_can_transform_rx_fd(spi, rx);
 	else
 		return mcp2517fd_can_transform_rx_normal(spi, rx);
