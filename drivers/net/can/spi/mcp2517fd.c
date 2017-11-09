@@ -658,6 +658,11 @@ struct mcp2517fd_priv {
 	struct net_device *net;
 	struct spi_device *spi;
 
+	struct workqueue_struct *wq;
+
+	struct work_struct tx_work;
+	struct sk_buff *tx_work_skb;
+
 	enum mcp2517fd_model model;
 	bool clock_pll;
 	bool clock_div2;
@@ -673,12 +678,8 @@ struct mcp2517fd_priv {
 	u32 spi_setup_speed_hz;
 	u32 spi_speed_hz;
 
-	struct mutex mcp_lock; /* SPI device lock */
-
 	int payload_size;
 	u8 payload_mode;
-
-	struct mutex txfifo_lock;
 
 	u32 tef_address_start;
 	u32 tef_address_end;
@@ -1008,8 +1009,6 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 
 	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.id, &obj.flags);
 
-	dev_err(&spi->dev, "TransmitFD: %08x => %08x\n", frame->can_id, obj.id);
-
 	obj.flags |= dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
 	obj.flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
 	obj.flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
@@ -1030,7 +1029,6 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 		frame->can_dlc = 8;
 
 	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.id, &obj.flags);
-	dev_err(&spi->dev, "Transmit: %08x => %08x\n", frame->can_id, obj.id);
 
 	obj.flags |= frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
 	obj.flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
@@ -1040,41 +1038,42 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 		spi, fifo, &obj, frame->can_dlc, frame->data);
 }
 
-static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
-					struct net_device *net)
+static void mcp2517fd_tx_work_handler(struct work_struct *ws)
 {
-        struct mcp2517fd_priv *priv = netdev_priv(net);
+        struct mcp2517fd_priv *priv = container_of(ws,
+						   struct mcp2517fd_priv,
+						   tx_work);
         struct spi_device *spi = priv->spi;
+	struct sk_buff *skb = priv->tx_work_skb;
 	int fifo;
 	int ret;
+	u32 pending_mask;
 
-	if (can_dropped_invalid_skb(net, skb))
-		return NETDEV_TX_OK;
+	/* trying to avoid a workqueue */
+	pending_mask = priv->tx_pending_mask;
 
 	/* decide on fifo to assign */
-	mutex_lock(&priv->txfifo_lock);
-	if (priv->tx_pending_mask) {
-		fifo = ffs(priv->tx_pending_mask) - 2;
+	if (pending_mask) {
+		fifo = ffs(pending_mask) - 2;
 	} else {
 		fifo = priv->tx_fifo_start + priv->tx_fifos - 1;
 	}
-
-	/* disable the queue if we have reached the lowest priority fifo */
-	if (fifo <= priv->tx_fifo_start)
-		netif_stop_queue(net);
 
 	/* handle error - this should not happen... */
 	if (fifo < priv->tx_fifo_start) {
 		dev_err(&spi->dev,
 			"reached tx-fifo %i, which is not valid\n",
 			fifo);
-		mutex_unlock(&priv->txfifo_lock);
-		return NETDEV_TX_BUSY;
+		return;
 	}
+
+	/* decide if we can reactivate the queue */
+	priv->tx_work_skb = NULL;
+	if (fifo > priv->tx_fifo_start)
+		netif_start_queue(priv->net);
 
 	/* mark as pending */
 	priv->tx_pending_mask |= BIT(fifo);
-	mutex_unlock(&priv->txfifo_lock);
 
 	/* now process it for real */
 	if (can_is_canfd_skb(skb))
@@ -1086,9 +1085,29 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 
 	/* keep it for reference until the message really got transmitted */
 	if (ret == NETDEV_TX_OK)
-		can_put_echo_skb(skb, net, fifo);
+		can_put_echo_skb(skb, priv->net, fifo);
+}
 
-	return ret;
+static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
+					struct net_device *net)
+{
+        struct mcp2517fd_priv *priv = netdev_priv(net);
+	struct spi_device *spi = priv->spi;
+
+        if (priv->tx_work_skb) {
+		dev_warn(&spi->dev, "hard_xmit called while tx busy\n");
+		return NETDEV_TX_BUSY;
+	}
+
+	if (can_dropped_invalid_skb(net, skb))
+		return NETDEV_TX_OK;
+
+	netif_stop_queue(net);
+
+	priv->tx_work_skb = skb;
+	queue_work(priv->wq, &priv->tx_work);
+
+	return NETDEV_TX_OK;
 }
 
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
@@ -1295,8 +1314,6 @@ static int mcp2517fd_set_normal_mode(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	dev_err(&spi->dev, "TODO: mcp2517fd_set_normal_mode - %i\n", type);
-
 	dev_err(&spi->dev, "  CanCTRL: %i\n",
 		(priv->can.ctrlmode & CAN_CTRLMODE_FD));
 
@@ -1473,7 +1490,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		ret = mcp2517fd_cmd_write(
 			spi, CAN_FIFOCON(fifo),
 			(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
-			((priv->rx_fifo_depth) << CAN_FIFOCON_FSIZE_SHIFT) |
+			((priv->rx_fifo_depth - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
 			CAN_FIFOCON_RXTSEN | /* RX timestamps */
 			CAN_FIFOCON_FRESET | /* reset FIFO */
 			CAN_FIFOCON_TFERFFIE | /* FIFO Full */
@@ -1782,8 +1799,8 @@ static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
 	/* clear the fifo */
 	ret = mcp2517fd_cmd_write_mask(
 		spi, CAN_FIFOCON(fifo),
-		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET,
-		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET,
+		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET*0,
+		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET*0,
 		priv->spi_speed_hz);
 	if (ret)
 		return ret;
@@ -1852,9 +1869,7 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	int i, count, ret, fifo;
 
 	/* calculate the number of fifos that have been processed */
-	mutex_lock(&priv->txfifo_lock);
 	count = hweight_long(priv->tx_pending_mask);
-	mutex_unlock(&priv->txfifo_lock);
 	count -= hweight_long(priv->status.txreq);
 
 	/* now clear TEF for each */
@@ -1887,9 +1902,7 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	}
 
 	/* release fifos for the future */
-	mutex_lock(&priv->txfifo_lock);
 	priv->tx_pending_mask &= ~mask;
-	mutex_unlock(&priv->txfifo_lock);
 
 	return 0;
 }
@@ -1925,26 +1938,18 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 	struct spi_device *spi = priv->spi;
 	//struct net_device *net = priv->net;
 	int ret;
+	int count = 0;
 
 	while (!priv->force_quit) {
 		/* read interrupt status flags */
 		ret = mcp2517fd_cmd_readn(spi, CAN_INT,
-					  &priv->status, sizeof(priv->status),
+					  &priv->status,
+					  sizeof(priv->status),
 					  priv->spi_speed_hz);
 		if (ret)
 			return ret;
-#if 0
-		dev_err(&spi->dev,"irq: intf:\t0x%08x\n", priv->status.intf);
-		dev_err(&spi->dev,"irq: txif:\t0x%08x\n", priv->status.txif);
-		dev_err(&spi->dev,"irq: txreq:\t0x%08x\n", priv->status.txreq);
-		dev_err(&spi->dev,"irq: txpend:\t0x%08x\n", priv->tx_pending_mask);
-		dev_err(&spi->dev,"irq: rxif:\t0x%08x\n", priv->status.rxif);
-		dev_err(&spi->dev,"irq: rxovif:\t0x%08x\n", priv->status.rxovif);
 
-		dev_err(&spi->dev,"irq: trec:\t0x%08x\n", priv->status.trec);
-		dev_err(&spi->dev,"irq: bdiag0:\t0x%08x\n", priv->status.bdiag0);
-		dev_err(&spi->dev,"irq: bdiag1:\t0x%08x\n", priv->status.bdiag1);
-#endif
+		/* only act if the mask is applied */
 		if ((priv->status.intf &
 		     (priv->status.intf >> CAN_INT_IE_SHIFT)) == 0)
 			break;
@@ -1953,6 +1958,24 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 		ret = mcp2517fd_can_ist_handle_status(spi);
 		if (ret)
 			return ret;
+
+		count++;
+		if (count > 1000) {
+			dev_err(&spi->dev,"too many loops - skipping\n");
+
+			dev_err(&spi->dev,"irq: intf:\t0x%08x\n", priv->status.intf);
+			dev_err(&spi->dev,"irq: txif:\t0x%08x\n", priv->status.txif);
+			dev_err(&spi->dev,"irq: txreq:\t0x%08x\n", priv->status.txreq);
+			dev_err(&spi->dev,"irq: txpend:\t0x%08x\n", priv->tx_pending_mask);
+			dev_err(&spi->dev,"irq: rxif:\t0x%08x\n", priv->status.rxif);
+			dev_err(&spi->dev,"irq: rxovif:\t0x%08x\n", priv->status.rxovif);
+
+			dev_err(&spi->dev,"irq: trec:\t0x%08x\n", priv->status.trec);
+			dev_err(&spi->dev,"irq: bdiag0:\t0x%08x\n", priv->status.bdiag0);
+			dev_err(&spi->dev,"irq: bdiag1:\t0x%08x\n", priv->status.bdiag1);
+
+			return IRQ_HANDLED;
+		}
 	}
 
 	return IRQ_HANDLED;
@@ -1972,7 +1995,6 @@ static int mcp2517fd_open(struct net_device *net)
 
 	mcp2517fd_power_enable(priv->transceiver, 1);
 
-	mutex_lock(&priv->mcp_lock);
 	priv->force_quit = 0;
 
 	ret = request_threaded_irq(spi->irq, NULL,
@@ -1985,6 +2007,10 @@ static int mcp2517fd_open(struct net_device *net)
 		close_candev(net);
 		goto open_unlock;
 	}
+
+        priv->wq = alloc_workqueue("mcp2517fd_wq", WQ_FREEZABLE | WQ_MEM_RECLAIM,
+				   0);
+	INIT_WORK(&priv->tx_work, mcp2517fd_tx_work_handler);
 
 	ret = mcp2517fd_hw_probe(spi);
 	if (ret) {
@@ -2011,7 +2037,6 @@ static int mcp2517fd_open(struct net_device *net)
 	netif_wake_queue(net);
 
 open_unlock:
-	mutex_unlock(&priv->mcp_lock);
 	return ret;
 }
 
@@ -2039,6 +2064,8 @@ static int mcp2517fd_stop(struct net_device *net)
 
 	priv->force_quit = 1;
 	free_irq(spi->irq, priv);
+	destroy_workqueue(priv->wq);
+	priv->wq = NULL;
 
 	/* Disable and clear pending interrupts */
 	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
@@ -2203,8 +2230,6 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		goto out_clk;
 
 	priv->spi = spi;
-	mutex_init(&priv->mcp_lock);
-	mutex_init(&priv->txfifo_lock);
 
 	SET_NETDEV_DEV(net, &spi->dev);
 
