@@ -1228,8 +1228,6 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	dev_err(&spi->dev, "Osc reg: %08x\n", val);
-
 	/* there can only be one... */
 	switch (val & (MCP2517FD_OSC_OSCRDY | MCP2517FD_OSC_OSCDIS)) {
 	case MCP2517FD_OSC_OSCRDY: /* either the clock is ready */
@@ -1271,7 +1269,6 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-	dev_err(&spi->dev, "CAN_CON 0x%08x\n",val);
 
 	/* apply mask and check */
 	if ((val & CAN_CON_DEFAULT_MASK) == CAN_CON_DEFAULT)
@@ -1337,9 +1334,6 @@ static int mcp2517fd_set_normal_mode(struct spi_device *spi)
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-
-	dev_err(&spi->dev, "  CanCTRL: %i\n",
-		(priv->can.ctrlmode & CAN_CTRLMODE_FD));
 
 	return 0;
 }
@@ -1557,8 +1551,6 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	priv->tef_address_end = priv->tef_address_start +
 		(priv->tx_fifos + 1) * sizeof(struct mcp2517fd_obj_tef) -
 		1;
-	dev_err(&spi->dev," TEF-FIFO: %03x - %03x\n",
-		priv->tef_address_start, priv->tef_address_end);
 
 	/* get all the relevant addresses for the transmit fifos */
 	for (i = 0; i < priv->tx_fifos; i++) {
@@ -1567,23 +1559,13 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 					 &val, priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-		/* normalize val to RAM address */
 		priv->fifo_address[fifo] = val;
 
-		dev_err(&spi->dev," TX-FIFO%02i: %04x\n",
-			fifo, priv->fifo_address[fifo]);
-	}
-
-	for (i = 0; i < priv->rx_fifos; i++) {
-		fifo = priv->rx_fifo_start + i;
 		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(fifo),
 					 &val, priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
 		priv->fifo_address[fifo] = val;
-
-		dev_err(&spi->dev," RX-FIFO%02i: %04x\n",
-			fifo, priv->fifo_address[fifo]);
 	}
 
 	/* now get back into config mode */
@@ -1618,8 +1600,6 @@ static int mcp2517fd_setup(struct net_device *net,
 {
 	u32 val;
 	int ret;
-
-	dev_err(&spi->dev, "Start_setup\n");
 
 	/* set up pll/clock if required */
 	ret = mcp2517fd_setup_osc(spi);
