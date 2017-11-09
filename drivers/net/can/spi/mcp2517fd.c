@@ -1,7 +1,7 @@
 /*
  * CAN bus driver for Microchip 2517FD CAN Controller with SPI Interface
  *
- * Copyright 2017 Martin Sperl
+ * Copyright 2017 Martin Sperl <kernel@martin.sperl.org>
  *
  * Based on Microchip MCP251x CAN controller driver written by
  * David Vrabel, Copyright 2006 Arcom Control Systems Ltd.
@@ -513,7 +513,7 @@
 	GENMASK(CAN_FIFOSTA_FIFOCI_SHIFT + CAN_FIFOSTA_FIFOCI_BITS - 1, \
 		CAN_FIFOSTA_FIFOCI_SHIFT)
 #define CAN_FIFOUA(x)			CAN_SFR_BASE(0x64 + 12 * (x - 1))
-#define CAN_FLTCON(x)			CAN_SFR_BASE(0x1D0 + (x >> 2))
+#define CAN_FLTCON(x)			CAN_SFR_BASE(0x1D0 + (x & 0x1c))
 #  define CAN_FILCON_SHIFT(x)		((x & 3) * 8)
 #  define CAN_FILCON_BITS(x)		4
 #  define CAN_FILCON_MASK(x)					\
@@ -1412,7 +1412,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-		ret = mcp2517fd_cmd_write(spi, CAN_FLTCON(i), 0,
+		ret = mcp2517fd_cmd_write_mask(
+			spi, CAN_FLTCON(i), 0,
+			CAN_FILCON_MASK(i),
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
@@ -1508,7 +1510,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		if (ret)
 			return ret;
 		/* prepare the rx filter config: filter i directs to fifo
-		 * FLTMSK and FLTOBJ are 0 already, so they map everything
+		 * FLTMSK and FLTOBJ are 0 already, so they match everything
 		 */
 		ret = mcp2517fd_cmd_write_mask(
 			spi, CAN_FLTCON(i),
