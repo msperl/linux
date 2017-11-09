@@ -13,6 +13,7 @@
 #include <linux/can/led.h>
 #include <linux/clk.h>
 #include <linux/completion.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
@@ -498,11 +499,11 @@
 	GENMASK(CAN_FIFOCON_PLSIZE_SHIFT + CAN_FIFOCON_PLSIZE_BITS - 1, \
 		CAN_FIFOCON_PLSIZE_SHIFT)
 #define CAN_FIFOSTA(x)			CAN_SFR_BASE(0x60 + 12 * (x - 1))
-#  define CAN_FIFOSTA_TFNRFNIE		BIT(0)
-#  define CAN_FIFOSTA_TFHRFHIE		BIT(1)
-#  define CAN_FIFOSTA_TFERFFIE		BIT(2)
-#  define CAN_FIFOSTA_RXOVIE		BIT(3)
-#  define CAN_FIFOSTA_TXATIE		BIT(4)
+#  define CAN_FIFOSTA_TFNRFNIF		BIT(0)
+#  define CAN_FIFOSTA_TFHRFHIF		BIT(1)
+#  define CAN_FIFOSTA_TFERFFIF		BIT(2)
+#  define CAN_FIFOSTA_RXOVIF		BIT(3)
+#  define CAN_FIFOSTA_TXATIF		BIT(4)
 #  define CAN_FIFOSTA_RXTSEN		BIT(5)
 #  define CAN_FIFOSTA_RTREN		BIT(6)
 #  define CAN_FIFOSTA_TXEN		BIT(7)
@@ -657,6 +658,7 @@ struct mcp2517fd_priv {
 	struct can_priv	   can;
 	struct net_device *net;
 	struct spi_device *spi;
+	struct dentry *debugfs_dir;
 
 	struct workqueue_struct *wq;
 
@@ -696,6 +698,7 @@ struct mcp2517fd_priv {
 	u8 rx_fifo_depth;
 	u8 rx_fifo_start;
 	u32 rx_fifo_mask;
+	u64 rx_overflow;
 
 	struct {
 		u32 intf;
@@ -731,6 +734,8 @@ struct mcp2517fd_priv {
 	u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
 	u8 spi_tx[MCP2517FD_BUFFER_TXRX_SIZE];
 	u8 spi_rx[MCP2517FD_BUFFER_TXRX_SIZE];
+
+	u64 fifo_usage[32];
 };
 
 static int mcp2517fd_sync_transfer(struct spi_device *spi,
@@ -1074,6 +1079,7 @@ static void mcp2517fd_tx_work_handler(struct work_struct *ws)
 
 	/* mark as pending */
 	priv->tx_pending_mask |= BIT(fifo);
+	priv->fifo_usage[fifo]++;
 
 	/* now process it for real */
 	if (can_is_canfd_skb(skb))
@@ -1495,7 +1501,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 			CAN_FIFOCON_FRESET | /* reset FIFO */
 			CAN_FIFOCON_TFERFFIE | /* FIFO Full */
 			CAN_FIFOCON_TFHRFHIE | /* FIFO Half Full*/
-			CAN_FIFOCON_TFNRFNIE, /* FIFO not empty */
+			CAN_FIFOCON_TFNRFNIE | /* FIFO not empty */
+			/* on the last fifo add overflow flag */
+			((i == priv->rx_fifos - 1) ? CAN_FIFOCON_RXOVIE : 0),
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
@@ -1790,6 +1798,7 @@ static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
 	/* calc the buffer address */
 	rx = (struct mcp2517fd_obj_rx *)(priv->fifo_data +
 					 priv->fifo_address[fifo]);
+	priv->fifo_usage[fifo]++;
 
 	/* transform the data to system byte order */
 	rx->id = le32_to_cpu(rx->id);
@@ -1804,6 +1813,8 @@ static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
 		priv->spi_speed_hz);
 	if (ret)
 		return ret;
+
+	/* increment usage */
 
 	/* submit the fifo to the network stack */
 	if (rx->flags & CAN_OBJ_FLAGS_FDF)
@@ -1907,6 +1918,57 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	return 0;
 }
 
+static void mcp2517fd_error_skb(struct net_device *net,
+			       int can_id, int data1)
+{
+	struct sk_buff *skb;
+	struct can_frame *frame;
+
+	skb = alloc_can_err_skb(net, &frame);
+	if (skb) {
+		frame->can_id = can_id;
+		frame->data[1] = data1;
+		netif_rx_ni(skb);
+	} else {
+		netdev_err(net, "cannot allocate error skb\n");
+	}
+}
+
+static int mcp2517fd_can_ist_handle_rxovif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 mask = priv->status.rxovif;
+	int canid = 0;
+	int data1 = 0;
+	int i;
+	int ret;
+
+	/* clear all fifos that have an overflow bit set */
+	for(i = 0; i < 32; i++) {
+		if (mask & BIT(i)) {
+			ret = mcp2517fd_cmd_write_mask(spi,
+						       CAN_FIFOSTA(i),
+						       0,
+						       CAN_FIFOSTA_RXOVIF,
+						       priv->spi_speed_hz);
+			if (ret)
+				return ret;
+			/* update statistics */
+			priv->net->stats.rx_over_errors++;
+			priv->net->stats.rx_errors++;
+			priv->rx_overflow++;
+			canid |= CAN_ERR_CRTL;
+			data1 |= CAN_ERR_CRTL_RX_OVERFLOW;
+		}
+	}
+
+	/* and send error packet */
+	if (canid)
+		mcp2517fd_error_skb(priv->net, canid, data1);
+
+	return 0;
+}
+
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -1926,6 +1988,13 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 			return ret;
 	}
 
+	/* handle errors */
+	if (priv->status.rxovif) {
+		ret = mcp2517fd_can_ist_handle_rxovif(spi);
+		if (ret)
+			return ret;
+	}
+
 	/* handle MODIF */
 	//if (priv->status.intf & CAN_INT_MODIF)
 
@@ -1936,9 +2005,7 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 {
 	struct mcp2517fd_priv *priv = dev_id;
 	struct spi_device *spi = priv->spi;
-	//struct net_device *net = priv->net;
 	int ret;
-	int count = 0;
 
 	while (!priv->force_quit) {
 		/* read interrupt status flags */
@@ -1958,24 +2025,6 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 		ret = mcp2517fd_can_ist_handle_status(spi);
 		if (ret)
 			return ret;
-
-		count++;
-		if (count > 1000) {
-			dev_err(&spi->dev,"too many loops - skipping\n");
-
-			dev_err(&spi->dev,"irq: intf:\t0x%08x\n", priv->status.intf);
-			dev_err(&spi->dev,"irq: txif:\t0x%08x\n", priv->status.txif);
-			dev_err(&spi->dev,"irq: txreq:\t0x%08x\n", priv->status.txreq);
-			dev_err(&spi->dev,"irq: txpend:\t0x%08x\n", priv->tx_pending_mask);
-			dev_err(&spi->dev,"irq: rxif:\t0x%08x\n", priv->status.rxif);
-			dev_err(&spi->dev,"irq: rxovif:\t0x%08x\n", priv->status.rxovif);
-
-			dev_err(&spi->dev,"irq: trec:\t0x%08x\n", priv->status.trec);
-			dev_err(&spi->dev,"irq: bdiag0:\t0x%08x\n", priv->status.bdiag0);
-			dev_err(&spi->dev,"irq: bdiag1:\t0x%08x\n", priv->status.bdiag1);
-
-			return IRQ_HANDLED;
-		}
 	}
 
 	return IRQ_HANDLED;
@@ -2107,6 +2156,56 @@ static const struct spi_device_id mcp2517fd_id_table[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, mcp2517fd_id_table);
+
+static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
+{
+#if defined(CONFIG_DEBUG_FS)
+	struct dentry *root;
+	char name[32];
+	int i;
+
+	/* create the net device name */
+	snprintf(name, sizeof(name), DEVICE_NAME"-%s",priv->net->name);
+	priv-> debugfs_dir = debugfs_create_dir(name, NULL);
+	root = priv-> debugfs_dir;
+
+	/* export the status structure */
+	debugfs_create_x32("intf", 0444, root, &priv->status.intf);
+	debugfs_create_x32("rx_if", 0444, root, &priv->status.rxif);
+	debugfs_create_x32("tx_if", 0444, root, &priv->status.txif);
+	debugfs_create_x32("rx_ovif", 0444, root, &priv->status.rxovif);
+	debugfs_create_x32("tx_atif", 0444, root, &priv->status.txatif);
+	debugfs_create_x32("tx_req", 0444, root, &priv->status.txreq);
+	debugfs_create_x32("trec", 0444, root, &priv->status.trec);
+	debugfs_create_x32("bdiag0", 0444, root, &priv->status.bdiag0);
+	debugfs_create_x32("bdiag1", 0444, root, &priv->status.bdiag1);
+
+	/* information on fifos */
+	debugfs_create_u8("rx_fifos", 0444, root, &priv->rx_fifos);
+	debugfs_create_x32("rx_fifo_mask", 0444, root, &priv->rx_fifo_mask);
+	debugfs_create_u8("tx_fifos", 0444, root, &priv->tx_fifos);
+	debugfs_create_x32("tx_fifo_mask", 0444, root, &priv->tx_fifo_mask);
+	debugfs_create_x32("tx_fifo_pending", 0444, root, &priv->tx_pending_mask);
+	debugfs_create_u32("fifo_size", 0444, root, &priv->payload_size);
+	debugfs_create_u64("rx_overflow", 0444, root, &priv->rx_overflow);
+
+	/* statistics on fifo buffer usage */
+	for (i = 1; i < 32; i++) {
+		snprintf(name, sizeof(name), "fifo_usage_%02i", i);
+		debugfs_create_u64(name, 0444, root,
+				   &priv->fifo_usage[i]);
+	}
+#endif
+}
+
+static void mcp2517fd_debugfs_remove(struct mcp2517fd_priv *priv)
+{
+#if defined(CONFIG_DEBUG_FS)
+       	if (priv-> debugfs_dir)
+		debugfs_remove_recursive(priv-> debugfs_dir);
+	priv-> debugfs_dir = NULL;
+#endif
+}
 
 static int mcp2517fd_can_probe(struct spi_device *spi)
 {
@@ -2248,6 +2347,10 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	if (ret)
 		goto error_probe;
 
+
+	/* register debugfs */
+	mcp2517fd_debugfs_add(priv);
+
 	devm_can_led_init(net);
 
 	netdev_info(net, "MCP%x successfully initialized.\n", priv->model);
@@ -2270,6 +2373,8 @@ static int mcp2517fd_can_remove(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
+
+	mcp2517fd_debugfs_remove(priv);
 
 	unregister_candev(net);
 
