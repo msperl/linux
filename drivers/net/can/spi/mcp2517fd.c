@@ -673,6 +673,8 @@ struct mcp2517fd_priv {
 	enum mcp2517fd_gpio_mode  gpio0_mode;
 	enum mcp2517fd_gpio_mode  gpio1_mode;
 	bool gpio_opendrain;
+	bool txcan_opendrain;
+	bool int_opendrain;
 
 	/* flags that should stay in the con_register */
 	u32 con_val;
@@ -1150,12 +1152,20 @@ static int mcp2517fd_do_set_nominal_bittiming(struct net_device *net)
 	struct can_bittiming *bt = &priv->can.bittiming;
 	struct spi_device *spi = priv->spi;
 
+	int sjw = bt->sjw;
+	int pseg2 = bt->phase_seg2;
+	int pseg1 = bt->phase_seg1;
+	int propseg = bt->prop_seg;
+	int brp = bt->brp;
+
+	int tseg1 = propseg + pseg1;
+	int tseg2 = pseg2;
+
 	/* calculate nominal bit timing */
-	u32 val = ((bt->sjw - 1) << CAN_NBTCFG_SJW_SHIFT)
-		| ((bt->phase_seg2 - 1) << CAN_NBTCFG_TSEG2_SHIFT)
-		| ((bt->phase_seg1 + bt->prop_seg - 1)
-		   << CAN_NBTCFG_TSEG1_SHIFT)
-		| ((bt->brp) << CAN_NBTCFG_BRP_SHIFT);
+	u32 val = ((sjw - 1) << CAN_NBTCFG_SJW_SHIFT)
+		| ((tseg2 - 1) << CAN_NBTCFG_TSEG2_SHIFT)
+		| ((tseg1 - 1) << CAN_NBTCFG_TSEG1_SHIFT)
+		| ((brp - 1) << CAN_NBTCFG_BRP_SHIFT);
 
 	return mcp2517fd_cmd_write(spi, CAN_NBTCFG, val,
 				   priv->spi_setup_speed_hz);
@@ -1167,12 +1177,20 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 	struct can_bittiming *bt = &priv->can.data_bittiming;
 	struct spi_device *spi = priv->spi;
 
-	/* calculate data bit timing */
-	u32 val = ((bt->sjw - 1) << CAN_DBTCFG_SJW_SHIFT)
-		| ((bt->phase_seg2 - 1) << CAN_DBTCFG_TSEG2_SHIFT)
-		| ((bt->phase_seg1 + bt->prop_seg - 1)
-		   << CAN_DBTCFG_TSEG1_SHIFT)
-		| ((bt->brp) << CAN_DBTCFG_BRP_SHIFT);
+	int sjw = bt->sjw;
+	int pseg2 = bt->phase_seg2;
+	int pseg1 = bt->phase_seg1;
+	int propseg = bt->prop_seg;
+	int brp = bt->brp;
+
+	int tseg1 = propseg + pseg1;
+	int tseg2 = pseg2;
+
+	/* calculate nominal bit timing */
+	u32 val = ((sjw - 1) << CAN_DBTCFG_SJW_SHIFT)
+		| ((tseg2 - 1) << CAN_DBTCFG_TSEG2_SHIFT)
+		| ((tseg1 - 1) << CAN_DBTCFG_TSEG1_SHIFT)
+		| ((brp - 1) << CAN_DBTCFG_BRP_SHIFT);
 
 	return mcp2517fd_cmd_write(spi, CAN_DBTCFG, val,
 				   priv->spi_setup_speed_hz);
@@ -1380,8 +1398,6 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 					 priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-		dev_err(&spi->dev,
-			"Read OSC 0x%08x - wait 0x%08x\n",val,waitfor);
 		if ((val & waitfor) == waitfor)
 			return 0;
 	}
@@ -1619,8 +1635,6 @@ static int mcp2517fd_setup(struct net_device *net,
 
 	/* GPIO handling - could expose this as gpios*/
 	val = 0; /* PUSHPULL INT , TXCAN PUSH/PULL, no Standby */
-	val |= MCP2517FD_IOCON_TXCANOD; /* OpenDrain TXCAN */
-	val |= MCP2517FD_IOCON_INTOD; /* OpenDrain INT pins */
 
 	/* SOF/CLOCKOUT pin 3 */
 	if (priv->clock_odiv < 0)
@@ -1661,6 +1675,10 @@ static int mcp2517fd_setup(struct net_device *net,
 	/* INT/GPIO pins as open drain */
 	if (priv->gpio_opendrain)
 		val |= MCP2517FD_IOCON_INTOD;
+	if (priv->txcan_opendrain)
+		val |= MCP2517FD_IOCON_TXCANOD; /* OpenDrain TXCAN */
+	if (priv->int_opendrain)
+		val |= MCP2517FD_IOCON_INTOD; /* OpenDrain INT pins */
 
 	ret = mcp2517fd_cmd_write(spi, MCP2517FD_IOCON, val,
 				  priv->spi_setup_speed_hz);
@@ -2312,7 +2330,6 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	}
 
 	/* Configure the SPI bus */
-	spi->max_speed_hz = priv->spi_speed_hz;
 	spi->bits_per_word = 8;
 	ret = spi_setup(spi);
 	if (ret)
