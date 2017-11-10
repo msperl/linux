@@ -594,8 +594,6 @@
 	GENMASK(CAN_EFF_EID_SHIFT + CAN_EFF_EID_BITS - 1,     \
 		CAN_EFF_EID_SHIFT)
 
-
-
 struct mcp2517fd_obj_tef {
 	u32 id;
 	u32 flags;
@@ -2207,6 +2205,103 @@ static void mcp2517fd_debugfs_remove(struct mcp2517fd_priv *priv)
 #endif
 }
 
+int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
+{
+#ifdef CONFIG_OF_DYNAMIC
+	struct spi_device *spi = priv->spi;
+	const struct device_node *np = spi->dev.of_node;
+	u32 val;
+	int ret;
+
+	ret = of_property_read_u32_index(np, "microchip,clock_div",
+					 0, &val);
+	if (!ret) {
+		switch (val) {
+		case 1: priv->clock_div2 = false; break;
+		case 2: priv->clock_div2 = true; break;
+		default:
+			dev_err(&spi->dev,
+				"Invalid value in device tree for "
+				"microchip,clock_div: %u"
+				" - valid_values: 1, 2\n",
+				val);
+			return -EINVAL;
+		}
+	}
+	ret = of_property_read_u32_index(np, "microchip,clock_out_div",
+					 0, &val);
+	if (!ret) {
+		switch (val) {
+		case 0:
+		case 1:
+		case 2:
+		case 4:
+		case 10:
+			priv->clock_odiv = val;
+			break;
+		default:
+			dev_err(&spi->dev,
+				"Invalid value in device tree for "
+				"microchip,clock_out_div: %u"
+				" - valid values: 0, 1, 2, 4, 10\n",
+				val);
+			return -EINVAL;
+		}
+	}
+
+	ret = of_property_read_u32_index(np, "microchip,gpio0_mode",
+					 0, &val);
+	if (!ret) {
+		switch (val) {
+		case 0: priv->gpio0_mode = gpio_mode_in; break;
+		case 1: priv->gpio0_mode = gpio_mode_int; break;
+		case 2: priv->gpio0_mode = gpio_mode_out_low; break;
+		case 3: priv->gpio0_mode = gpio_mode_out_high; break;
+		case 4: priv->gpio0_mode = gpio_mode_standby; break;
+		default:
+			dev_err(&spi->dev,
+				"Invalid value in device tree for "
+				"microchip,gpio0_mode: %u"
+				" - valid values: 0, 1, 2, 3, 4\n",
+				val);
+			return -EINVAL;
+		}
+	} else {
+		priv->gpio0_mode = gpio_mode_in;
+	}
+
+	ret = of_property_read_u32_index(np, "microchip,gpio1_mode",
+					 0, &val);
+	if (!ret) {
+		switch (val) {
+		case 0: priv->gpio1_mode = gpio_mode_in; break;
+		case 1: priv->gpio1_mode = gpio_mode_int; break;
+		case 2: priv->gpio1_mode = gpio_mode_out_low; break;
+		case 3: priv->gpio1_mode = gpio_mode_out_high; break;
+		default:
+			dev_err(&spi->dev,
+				"Invalid value in device tree for "
+				"microchip,gpio1_mode: %u"
+				" - valif_values: 0, 1, 2, 3, 4\n",
+				val);
+			return -EINVAL;
+		}
+	} else {
+		priv->gpio1_mode = gpio_mode_in;
+	}
+
+	priv->gpio_opendrain = of_property_read_bool(
+		np, "microchip,gpio_opendrain");
+
+	priv->txcan_opendrain = of_property_read_bool(
+		np, "microchip,txcan_opendrain");
+
+	priv->int_opendrain = of_property_read_bool(
+		np, "microchip,int_opendrain");
+#endif
+	return 0;
+}
+
 static int mcp2517fd_can_probe(struct spi_device *spi)
 {
 	const struct of_device_id *of_id =
@@ -2261,21 +2356,32 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		priv->model = (enum mcp2517fd_model)of_id->data;
 	else
 		priv->model = spi_get_device_id(spi)->driver_data;
+
+	priv->spi = spi;
 	priv->net = net;
 	priv->clk = clk;
 
 	spi_set_drvdata(spi, priv);
 
-	/* set up gpio modes as GPIO INT*/
+	/* set up gpio modes as GPIO INT */
 	priv->gpio0_mode = gpio_mode_int;
 	priv->gpio1_mode = gpio_mode_int;
+	/* all by default as push/pull */
+	priv->gpio_opendrain = false;
+	priv->txcan_opendrain = false;
+	priv->int_opendrain = false;
+	/* do not use the SCK clock divider of 2 */
+	priv->clock_div2 = false;
+	/* clock output is divided by 10 */
+	priv->clock_odiv = 10;
 
 	/* if we have a clock that is smaller then 4MHz, then enable the pll */
 	priv->clock_pll = (freq <= MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY);
-	/* do not use the SCK clock divider */
-	priv->clock_div2 = false;
-	/* clock output is divided by 10 - maybe expose this as a clock ?*/
-	priv->clock_odiv = 10;
+
+	/* check in device tree for overrrides */
+	ret = mcp2517fd_of_parse(priv);
+	if (ret)
+		return ret;
 
 	/* decide on real can clock rate */
 	priv->can.clock.freq = freq;
@@ -2326,8 +2432,6 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	ret = mcp2517fd_power_enable(priv->power, 1);
 	if (ret)
 		goto out_clk;
-
-	priv->spi = spi;
 
 	SET_NETDEV_DEV(net, &spi->dev);
 
