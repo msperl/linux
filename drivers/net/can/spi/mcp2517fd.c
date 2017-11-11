@@ -664,6 +664,12 @@ struct mcp2517fd_priv {
 	struct work_struct tx_work;
 	struct sk_buff *tx_work_skb;
 
+	u64 irq_loops;
+	u32 irq_state;
+#define IRQ_STATE_NEVER_RUN 0
+#define IRQ_STATE_RUNNING 1
+#define IRQ_STATE_HANDLED 2
+
 	enum mcp2517fd_model model;
 	bool clock_pll;
 	bool clock_div2;
@@ -1233,6 +1239,21 @@ static void mcp2517fd_open_clean(struct net_device *net)
 	close_candev(net);
 }
 
+static int mcp2517fd_disable_interrupts(struct spi_device *spi,
+					u32 speed_hz)
+{
+	return mcp2517fd_cmd_write(spi, CAN_INT, 0, speed_hz);
+}
+
+static int mcp2517fd_enable_interrupts(struct spi_device *spi,
+				       u32 speed_hz)
+{
+	return mcp2517fd_cmd_write(spi, CAN_INT,
+				   CAN_INT_TEFIE |
+				   CAN_INT_RXIE,
+				   speed_hz);
+}
+
 static int mcp2517fd_hw_probe(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -1334,8 +1355,12 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	dev_dbg(&spi->dev, "CAN_CON 0x%08x\n",val);
 
 	/* apply mask and check */
-	return ((val & CAN_CON_DEFAULT_MASK) != CAN_CON_DEFAULT) ?
-		-ENODEV : 0;
+	if ((val & CAN_CON_DEFAULT_MASK) != CAN_CON_DEFAULT)
+		return -ENODEV;
+
+	/* just in case: disable interrupts on controller */
+	return mcp2517fd_disable_interrupts(spi,
+					    priv->spi_setup_speed_hz);
 }
 
 static int mcp2517fd_set_normal_mode(struct spi_device *spi)
@@ -1586,12 +1611,16 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		if (ret)
 			return ret;
 		priv->fifo_address[fifo] = val;
+	}
 
+	/* get all the relevant addresses for the rx fifos */
+	for (i = 0; i < priv->rx_fifos; i++) {
+		fifo = priv->rx_fifo_start + i;
 		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(fifo),
 					 &val, priv->spi_setup_speed_hz);
-		if (ret)
-			return ret;
-		priv->fifo_address[fifo] = val;
+               if (ret)
+                       return ret;
+               priv->fifo_address[fifo] = val;
 	}
 
 	/* now get back into config mode */
@@ -1603,21 +1632,6 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		return ret;
 
 	return 0;
-}
-
-static int mcp2517fd_disable_interrupts(struct spi_device *spi,
-					u32 speed_hz)
-{
-	return mcp2517fd_cmd_write(spi, CAN_INT, 0, speed_hz);
-}
-
-static int mcp2517fd_enable_interrupts(struct spi_device *spi,
-				       u32 speed_hz)
-{
-	return mcp2517fd_cmd_write(spi, CAN_INT,
-				   CAN_INT_TEFIE |
-				   CAN_INT_RXIE,
-				   speed_hz);
 }
 
 static int mcp2517fd_setup(struct net_device *net,
@@ -1813,17 +1827,6 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 	return 0;
 }
 
-
-static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
-					   struct mcp2517fd_obj_rx *rx)
-{
-	/* submit the fifo to the network stack */
-	if (rx->flags & CAN_OBJ_FLAGS_FDF)
-		return mcp2517fd_can_transform_rx_fd(spi, rx);
-	else
-		return mcp2517fd_can_transform_rx_normal(spi, rx);
-}
-
 static int mcp2517fd_normal_release_fifos(struct spi_device *spi,
 					int start, int end)
 {
@@ -1913,31 +1916,154 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 	return 0;
 }
 
-static int mcp2517fd_compare_rxobj_ts(const void *a, const void *b)
+struct mcp2517fd_read_fifo_info {
+	struct mcp2517fd_obj_rx *rxb[32];
+	int rx_count;
+	u32 tsmin;
+	u32 tsmax;
+} ;
+
+static int mcp2517fd_transform_rx(struct mcp2517fd_read_fifo_info *rfi,
+				   struct mcp2517fd_obj_rx *rx)
 {
-	const struct mcp2517fd_obj_rx *rxa = a;
-	const struct mcp2517fd_obj_rx *rxb = b;
-	if (rxa->ts < rxb->ts)
-		return -1;
-	if (rxa->ts > rxb->ts)
-		return 1;
+	int dlc;
+
+	/* set pointer to received list */
+	rfi->rxb[rfi->rx_count] = rx;
+	rfi->rx_count++;
+
+	/* transform the data to system byte order */
+	rx->id = le32_to_cpu(rx->id);
+	rx->flags = le32_to_cpu(rx->flags);
+	rx->ts = le32_to_cpu(rx->ts);
+	/* and get tsmin/tsmax */
+	if (rfi->tsmin > rx->ts)
+		rfi->tsmin = rx->ts;
+	if (rfi->tsmax > rx->ts)
+		rfi->tsmax = rx->ts;
+	/* calc length */
+	dlc = (rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
+		>> CAN_OBJ_FLAGS_DLC_SHIFT;
+	return can_dlc2len(dlc);
+}
+
+/*
+ * read_fifo implementations
+ *
+ * read_fifos is a simple implementation, that:
+ *   * loops all fifos
+ *     * read header + some data-bytes (8)
+ *     * read rest of data-bytes bytes
+ *     * release fifo
+ *   for 3 can frames dlc<=8 to read here we have:
+ *     * 6 spi transfers
+ *     * 75 bytes (= 3 * (2 + 12 + 8) bytes + 3 * 3 bytes)
+ *   for 3 canfd frames dlc>8 to read here we have:
+ *     * 9 spi transfers
+ *     * 81 (= 3 * (2 + 12 + 8 + 2) bytes + 3 * 3 bytes) + 3 * extra payload
+ *     this only transfers the required size of bytes on the spi bus.
+ *
+ * bulk_read_fifos is an optimization that is most practical for
+ * Can2.0 busses, but may also be practical for CanFD busses that
+ * have a high average payload data size.
+ *
+ * It will read all of the fifo data in a single spi_transfer:
+ *   * read all fifos in one go (as long as these are ajacent to each other)
+ *   * loop all fifos
+ *     * release fifo
+ *   for 3 can2.0 frames to read here we have:
+ *     * 4 spi transfers
+ *     * 71 bytes (= 2 + 3 * (12 + 8) bytes + 3 * 3 bytes)
+ *   for 3 canfd frames to read here we have:
+ *     * 4 spi transfers
+ *     * 230 bytes (= 2 + 3 * (12 + 64) bytes)
+ *     obviously this reads way too many bytes for framesizes <=32 bytes,
+ *     but it avoids the overhead on the CPU side and may even trigger
+ *     DMA transfers due to the high byte count, which release CPU cycles.
+ *
+ * This optimization will also be efficient for cases where a high
+ * percentage of canFD frames has a dlc-size > 8.
+ * This mode is used for Can2.0 configured busses.
+ *
+ * For now this option can get forced for CanFD via a module parameter.
+ * In the future there may be some heuristics that could trigger a usage
+ * of this mode as well in some circumstances.
+ *
+ * Note: there is a second optimization for release fifo as well,
+ *       but it is not as efficient as this optimization for the
+ *       non-CanFD case - see mcp2517fd_bulk_release_fifos
+ */
+
+static int mcp2517fd_read_fifos(struct spi_device *spi,
+				struct mcp2517fd_read_fifo_info *rfi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int fifo_header_size = sizeof(struct mcp2517fd_obj_rx);
+	int fifo_min_payload_size = 8;
+	int fifo_min_size = fifo_header_size + fifo_min_payload_size;
+	int fifo_max_payload_size =
+		((priv->can.ctrlmode & CAN_CTRLMODE_FD) ? 64 : 8);
+	u32 mask = priv->status.rxif;
+	struct mcp2517fd_obj_rx *rx;
+	int i, len;
+	int ret;
+
+	/* read all the "open" segments in big chunks */
+	for(i = priv->rx_fifo_start ;
+	    i < priv->rx_fifo_start + priv->rx_fifos;
+	    i++) {
+		if (!(mask & BIT(i)))
+		    continue;
+		/* the fifo to fill */
+		rx = (struct mcp2517fd_obj_rx *)
+			(priv->fifo_data + priv->fifo_address[i]);
+		/* read the minimal payload */
+		ret = mcp2517fd_cmd_readn(
+			spi, FIFO_DATA(priv->fifo_address[i]),
+			rx,
+			fifo_min_size,
+			priv->spi_speed_hz);
+		if (ret)
+			return ret;
+		/* process fifo stats and get length */
+		len = min_t(int, mcp2517fd_transform_rx(rfi, rx),
+			    fifo_max_payload_size);
+
+		/* read extra payload if needed */
+		if (len > fifo_min_payload_size) {
+			ret = mcp2517fd_cmd_readn(
+				spi,
+				FIFO_DATA(priv->fifo_address[i] +
+					  fifo_min_size),
+				&rx->data[fifo_min_payload_size],
+				len - fifo_min_payload_size,
+				priv->spi_speed_hz);
+			if (ret)
+				return ret;
+		}
+		/* release fifo */
+		ret = mcp2517fd_normal_release_fifos(spi, i, i + 1);
+		if (ret)
+			return ret;
+		/* increment fifo_usage */
+		priv->fifo_usage[i]++;
+	}
+
 	return 0;
 }
 
-static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
+static int mcp2517fd_bulk_read_fifos(struct spi_device *spi,
+				struct mcp2517fd_read_fifo_info *rfi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u32 mask = priv->status.rxif;
-	u32 fifo_size = sizeof(struct mcp2517fd_obj_rx) +
+	int fifo_header_size = sizeof(struct mcp2517fd_obj_rx);
+	int fifo_max_payload_size =
 		((priv->can.ctrlmode & CAN_CTRLMODE_FD) ? 64 : 8);
-	struct mcp2517fd_obj_rx *rxb[32], *rx;
-	int rx_count = 0;
-	u32 tsmin = -1, tsmax = 0;
+	int fifo_max_size = fifo_header_size + fifo_max_payload_size;
+	u32 mask = priv->status.rxif;
+	struct mcp2517fd_obj_rx *rx;
 	int i, j;
 	int ret;
-
-	if (!mask)
-		return 0;
 
 	/* read all the "open" segments in big chunks */
 	for(i = priv->rx_fifo_start ;
@@ -1957,7 +2083,7 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 			ret = mcp2517fd_cmd_readn(
 				spi, FIFO_DATA(priv->fifo_address[i]),
 				priv->fifo_data + priv->fifo_address[i],
-				(j - i) * fifo_size,
+				(j - i) * fifo_max_size,
 				priv->spi_speed_hz);
 			if (ret)
 				return ret;
@@ -1978,39 +2104,73 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 				rx = (struct mcp2517fd_obj_rx *)
 					priv->fifo_data +
 					priv->fifo_address[i];
-				rxb[rx_count] = rx;
-				rx_count++;
+				/* process fifo stats */
+				mcp2517fd_transform_rx(rfi, rx);
 				/* increment usage */
 				priv->fifo_usage[i]++;
-				/* transform the data to system byte order */
-				rx->id = le32_to_cpu(rx->id);
-				rx->flags = le32_to_cpu(rx->flags);
-				rx->ts = le32_to_cpu(rx->ts);
-				/* and get tsmin/tsmax */
-				if (tsmin > rx->ts)
-					tsmin = rx->ts;
-				if (tsmax > rx->ts)
-					tsmax = rx->ts;
 			}
 		}
 	}
+
+	return 0;
+}
+
+static int mcp2517fd_compare_rxobj_ts(const void *a, const void *b)
+{
+	const struct mcp2517fd_obj_rx *rxa = a;
+	const struct mcp2517fd_obj_rx *rxb = b;
+	if (rxa->ts < rxb->ts)
+		return -1;
+	if (rxa->ts > rxb->ts)
+		return 1;
+	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_read_fifo_info rfi;
+	u32 mask = priv->status.rxif;
+	int i;
+	int ret;
+
+	if (!mask)
+		return 0;
+
+	/* prepare rfi - mostly used for sorting */
+	rfi.tsmin = -1;
+	rfi.tsmax = 0;
+	rfi.rx_count = 0;
+
+	/* read all the fifos - for non-fd case use bulk read optimization */
+	if (((priv->can.ctrlmode & CAN_CTRLMODE_FD) == 0) ||
+	    use_complete_fdfifo_read)
+		ret = mcp2517fd_bulk_read_fifos(spi, &rfi);
+	else
+		ret = mcp2517fd_read_fifos(spi, &rfi);
 
 	/*
 	 * now handle those messages in an ordered way
 	 * this could potentially get mixed with tef frames as well
 	 */
 	/* possibly realign timestamp so that they compare with overflow */
-	if (tsmin + BIT(30) < tsmax)
-		for (i = 0; i < rx_count ; i++) {
-			rxb[i]->ts += BIT(30);
+	if (rfi.tsmin + BIT(30) < rfi.tsmax)
+		for (i = 0; i < rfi.rx_count ; i++) {
+			rfi.rxb[i]->ts += BIT(30);
 		}
 
 	/* sort the fifos by timestamp */
-	sort(rxb, rx_count, sizeof(*rxb), mcp2517fd_compare_rxobj_ts, NULL);
+	sort(rfi.rxb, rfi.rx_count, sizeof(*rfi.rxb),
+	     mcp2517fd_compare_rxobj_ts, NULL);
 
-	/* process the fifos */
-	for (i = 0; i < rx_count ; i++) {
-		ret = mcp2517fd_can_ist_handle_rxfifo(spi, rxb[i]);
+	/* process the recived fifos */
+	for (i = 0; i < rfi.rx_count ; i++) {
+		if (rfi.rxb[i]->flags & CAN_OBJ_FLAGS_FDF)
+			ret = mcp2517fd_can_transform_rx_fd(
+				spi, rfi.rxb[i]);
+		else
+			ret = mcp2517fd_can_transform_rx_normal(
+				spi, rfi.rxb[i]);
 		if (ret)
 			return ret;
 	}
@@ -2155,7 +2315,11 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 	struct spi_device *spi = priv->spi;
 	int ret;
 
+	priv->irq_state = IRQ_STATE_RUNNING;
+
 	while (!priv->force_quit) {
+		priv->irq_loops++;
+
 		/* read interrupt status flags */
 		ret = mcp2517fd_cmd_readn(spi, CAN_INT,
 					  &priv->status,
@@ -2175,6 +2339,8 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 			return ret;
 	}
 
+	priv->irq_state = IRQ_STATE_HANDLED;
+
 	return IRQ_HANDLED;
 }
 
@@ -2183,6 +2349,8 @@ static int mcp2517fd_open(struct net_device *net)
 	struct mcp2517fd_priv *priv = netdev_priv(net);
 	struct spi_device *spi = priv->spi;
 	int ret;
+
+	dev_err(&spi->dev, "open: IRQ: %i\n", spi->irq);
 
 	ret = open_candev(net);
 	if (ret) {
@@ -2194,12 +2362,17 @@ static int mcp2517fd_open(struct net_device *net)
 
 	priv->force_quit = 0;
 
+	priv->irq_state = 0;
+	priv->irq_loops = 0;
+        priv->force_quit = 0;
 	ret = request_threaded_irq(spi->irq, NULL,
 				   mcp2517fd_can_ist,
-				   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
+				   IRQF_ONESHOT | IRQF_TRIGGER_LOW,
+//				   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
 				   DEVICE_NAME, priv);
 	if (ret) {
-		dev_err(&spi->dev, "failed to acquire irq %d\n", spi->irq);
+		dev_err(&spi->dev, "failed to acquire irq %d - %i\n",
+			spi->irq, ret);
 		mcp2517fd_power_enable(priv->transceiver, 0);
 		close_candev(net);
 		goto open_unlock;
@@ -2308,7 +2481,7 @@ MODULE_DEVICE_TABLE(spi, mcp2517fd_id_table);
 static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 {
 #if defined(CONFIG_DEBUG_FS)
-	struct dentry *root;
+	struct dentry *root, *fifousage, *fifoaddr, *rx, *tx, *status;
 	char name[32];
 	int i;
 
@@ -2317,32 +2490,50 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	priv-> debugfs_dir = debugfs_create_dir(name, NULL);
 	root = priv-> debugfs_dir;
 
+	rx = debugfs_create_dir("rx", root);
+	tx = debugfs_create_dir("rx", root);
+	fifousage = debugfs_create_dir("fifo_usage", root);
+	fifoaddr = debugfs_create_dir("fifo_address", root);
+	status = debugfs_create_dir("status", root);
+
+	/* add irq state info */
+	debugfs_create_u64("irq_loops", 0444, root, &priv->irq_loops);
+	debugfs_create_u32("irq_state", 0444, root, &priv->irq_state);
+
 	/* export the status structure */
-	debugfs_create_x32("intf", 0444, root, &priv->status.intf);
-	debugfs_create_x32("rx_if", 0444, root, &priv->status.rxif);
-	debugfs_create_x32("tx_if", 0444, root, &priv->status.txif);
-	debugfs_create_x32("rx_ovif", 0444, root, &priv->status.rxovif);
-	debugfs_create_x32("tx_atif", 0444, root, &priv->status.txatif);
-	debugfs_create_x32("tx_req", 0444, root, &priv->status.txreq);
-	debugfs_create_x32("trec", 0444, root, &priv->status.trec);
-	debugfs_create_x32("bdiag0", 0444, root, &priv->status.bdiag0);
-	debugfs_create_x32("bdiag1", 0444, root, &priv->status.bdiag1);
+	debugfs_create_x32("intf", 0444, status, &priv->status.intf);
+	debugfs_create_x32("rx_if", 0444, status, &priv->status.rxif);
+	debugfs_create_x32("tx_if", 0444, status, &priv->status.txif);
+	debugfs_create_x32("rx_ovif", 0444, status, &priv->status.rxovif);
+	debugfs_create_x32("tx_atif", 0444, status, &priv->status.txatif);
+	debugfs_create_x32("tx_req", 0444, status, &priv->status.txreq);
+	debugfs_create_x32("trec", 0444, status, &priv->status.trec);
+	debugfs_create_x32("bdiag0", 0444, status, &priv->status.bdiag0);
+	debugfs_create_x32("bdiag1", 0444, status, &priv->status.bdiag1);
 
 	/* information on fifos */
-	debugfs_create_u8("rx_fifos", 0444, root, &priv->rx_fifos);
-	debugfs_create_x32("rx_fifo_mask", 0444, root, &priv->rx_fifo_mask);
-	debugfs_create_u8("tx_fifos", 0444, root, &priv->tx_fifos);
-	debugfs_create_x32("tx_fifo_mask", 0444, root, &priv->tx_fifo_mask);
-	debugfs_create_x32("tx_fifo_pending", 0444, root, &priv->tx_pending_mask);
-	debugfs_create_u32("fifo_size", 0444, root, &priv->payload_size);
-	debugfs_create_u64("rx_overflow", 0444, root, &priv->rx_overflow);
+	debugfs_create_u8("fifo_start", 0444, rx, &priv->rx_fifo_start);
+	debugfs_create_u8("fifo_count", 0444, rx, &priv->rx_fifos);
+	debugfs_create_x32("fifo_mask", 0444, rx, &priv->rx_fifo_mask);
+	debugfs_create_u64("rx_overflow", 0444, rx, &priv->rx_overflow);
+
+	debugfs_create_u8("fifo_start", 0444, tx, &priv->tx_fifo_start);
+	debugfs_create_u8("fifo_count", 0444, tx, &priv->tx_fifos);
+	debugfs_create_x32("fifo_mask", 0444, tx, &priv->tx_fifo_mask);
+	debugfs_create_x32("fifo_pending", 0444, tx, &priv->tx_pending_mask);
+
+	debugfs_create_u32("fifo_max_payload_size", 0444, root,
+			   &priv->payload_size);
 
 	/* statistics on fifo buffer usage */
 	for (i = 1; i < 32; i++) {
-		snprintf(name, sizeof(name), "fifo_usage_%02i", i);
-		debugfs_create_u64(name, 0444, root,
+		snprintf(name, sizeof(name), "%02i", i);
+		debugfs_create_u64(name, 0444, fifousage,
 				   &priv->fifo_usage[i]);
+		debugfs_create_u32(name, 0444, fifoaddr,
+				   &priv->fifo_address[i]);
 	}
+
 #endif
 }
 
@@ -2460,6 +2651,8 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	struct mcp2517fd_priv *priv;
 	struct clk *clk;
 	int ret, freq;
+
+	dev_err(&spi->dev, "probe: IRQ: %i\n", spi->irq);
 
 	clk = devm_clk_get(&spi->dev, NULL);
 	if (IS_ERR(clk)) {
@@ -2600,12 +2793,12 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	if (ret)
 		goto error_probe;
 
-
 	/* register debugfs */
 	mcp2517fd_debugfs_add(priv);
 
 	devm_can_led_init(net);
 
+	dev_err(&spi->dev, "probe2: IRQ: %i\n", spi->irq);
 	netdev_info(net, "MCP%x successfully initialized.\n", priv->model);
 	return 0;
 
@@ -2626,6 +2819,8 @@ static int mcp2517fd_can_remove(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
+
+	dev_err(&spi->dev, "remove: IRQ: %i\n", spi->irq);
 
 	mcp2517fd_debugfs_remove(priv);
 
