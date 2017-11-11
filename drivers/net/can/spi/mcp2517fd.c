@@ -28,6 +28,7 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/sort.h>
 #include <linux/spi/spi.h>
 #include <linux/uaccess.h>
 #include <linux/regulator/consumer.h>
@@ -738,6 +739,18 @@ struct mcp2517fd_priv {
 	u64 fifo_usage[32];
 };
 
+/* module parameters */
+bool use_bulk_release_fifos = false;
+module_param(use_bulk_release_fifos, bool, S_IRUGO | S_IWUSR | S_IWGRP);
+MODULE_PARM_DESC(use_bulk_release_fifos,
+		 "Use code that favours longer spi transfers over "
+		 "multiple transfers");
+bool use_complete_fdfifo_read = false;
+module_param(use_complete_fdfifo_read, bool, S_IRUGO | S_IWUSR | S_IWGRP);
+MODULE_PARM_DESC(use_complete_fdfifo_read,
+		 "Use code that favours longer spi transfers "
+		 "(of unnecessary data) over multiple transfers for fd can");
+
 static int mcp2517fd_sync_transfer(struct spi_device *spi,
 				 struct spi_transfer *xfer,
 				 unsigned int xfers,
@@ -945,6 +958,21 @@ static int mcp2517fd_cmd_write(struct spi_device *spi, u32 reg, u32 data,
 			       u32 speed_hz)
 {
 	return mcp2517fd_cmd_write_mask(spi, reg, data, -1, speed_hz);
+}
+
+static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
+			       void *data, int n, u32 speed_hz)
+{
+	u8 cmd[2];
+	int ret;
+
+	mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE, reg, cmd);
+
+	ret = mcp2517fd_write_then_write(spi, &cmd, 2, data, n, speed_hz);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
 static int mcp2517fd_transmit_message_common(
@@ -1787,38 +1815,113 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 
 
 static int mcp2517fd_can_ist_handle_rxfifo(struct spi_device *spi,
-					   int fifo)
+					   struct mcp2517fd_obj_rx *rx)
 {
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	struct mcp2517fd_obj_rx *rx;
-	int ret;
-
-	/* calc the buffer address */
-	rx = (struct mcp2517fd_obj_rx *)(priv->fifo_data +
-					 priv->fifo_address[fifo]);
-	priv->fifo_usage[fifo]++;
-
-	/* transform the data to system byte order */
-	rx->id = le32_to_cpu(rx->id);
-	rx->flags = le32_to_cpu(rx->flags);
-	rx->ts = le32_to_cpu(rx->ts);
-
-	/* clear the fifo */
-	ret = mcp2517fd_cmd_write_mask(
-		spi, CAN_FIFOCON(fifo),
-		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET*0,
-		CAN_FIFOCON_UINC | CAN_FIFOCON_FRESET*0,
-		priv->spi_speed_hz);
-	if (ret)
-		return ret;
-
-	/* increment usage */
-
 	/* submit the fifo to the network stack */
 	if (rx->flags & CAN_OBJ_FLAGS_FDF)
 		return mcp2517fd_can_transform_rx_fd(spi, rx);
 	else
 		return mcp2517fd_can_transform_rx_normal(spi, rx);
+}
+
+static int mcp2517fd_normal_release_fifos(struct spi_device *spi,
+					int start, int end)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int ret;
+
+	/* release each fifo in a separate transfer */
+	for (; start < end ; start++) {
+		ret = mcp2517fd_cmd_write_mask(
+			spi, CAN_FIFOCON(start),
+			CAN_FIFOCON_UINC,
+			CAN_FIFOCON_UINC,
+			priv->spi_speed_hz);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+/*
+ * unfortunately the CAN_FIFOCON are not directly consecutive
+ * so the optimization of "clearing all in one spi_transfer"
+ * would produce an overhead of 11 unnecessary bytes/fifo
+ * - transferring 14 (2 cmd + 12 data) bytes
+ * instead of just 3 (2 + 1).
+ * On some slower systems this may still be beneficial,
+ * but it is not good enough for the generic case.
+ * On a Raspberry Pi CM the timings for clearing 3 fifos
+ * (at 12.5MHz SPI clock speed) are:
+ * * normal:
+ *   * 3 spi transfers
+ *   * 9 bytes total
+ *   * 36.74us from first CS low to last CS high
+ *   * individual CS: 9.14us, 5.74us and 5.16us
+ *   * 77.02us from CS up of fifo transfer to last release CS up
+ * * bulk:
+ *   * 1 spi transfer
+ *   * 27 bytes total
+ *   * 29.06us CS Low
+ *   * 78.28us from CS up of fifo transfer to last release CS up
+ * this obviously varies with SPI_clock speed
+ * - the slower the clock the less efficient the optimization.
+ * similarly the faster the CPU (and bigger the code cache) the
+ * less effcient the optimization - the above case is border line.
+ */
+#define FIFOCON_SPACING (CAN_FIFOCON(1) - CAN_FIFOCON(0))
+#define FIFOCON_SPACINGW (FIFOCON_SPACING/sizeof(u32))
+static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
+					int start, int end)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int i;
+	int ret;
+
+	/* calculate start address and length */
+	int fifos = end - start;
+        int first_byte = (ffs(CAN_FIFOCON_UINC) - 1)  >> 3;
+	int addr = CAN_FIFOCON(start);
+	int len = 1 + (fifos - 1) * FIFOCON_SPACING;
+
+	/* the worsted case buffer */
+	u32 buf[32 * FIFOCON_SPACINGW], base;
+
+	base = (priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
+		((priv->rx_fifo_depth - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
+		CAN_FIFOCON_RXTSEN | /* RX timestamps */
+		CAN_FIFOCON_UINC |
+		CAN_FIFOCON_TFERFFIE | /* FIFO Full */
+		CAN_FIFOCON_TFHRFHIE | /* FIFO Half Full*/
+		CAN_FIFOCON_TFNRFNIE; /* FIFO not empty */
+
+	memset(buf, 0, sizeof(buf));
+	for (i = 0; i < end - start ; i++) {
+		if (i == priv->rx_fifos -1)
+			base |= CAN_FIFOCON_RXOVIE;
+		buf[FIFOCON_SPACINGW * i] = cpu_to_le32(base);
+	}
+
+	ret = mcp2517fd_cmd_writen(spi, addr + first_byte,
+				   (u8*)buf + first_byte,
+				   len,
+				   priv->spi_speed_hz);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static int mcp2517fd_compare_rxobj_ts(const void *a, const void *b)
+{
+	const struct mcp2517fd_obj_rx *rxa = a;
+	const struct mcp2517fd_obj_rx *rxb = b;
+	if (rxa->ts < rxb->ts)
+		return -1;
+	if (rxa->ts > rxb->ts)
+		return 1;
+	return 0;
 }
 
 static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
@@ -1827,6 +1930,9 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 	u32 mask = priv->status.rxif;
 	u32 fifo_size = sizeof(struct mcp2517fd_obj_rx) +
 		((priv->can.ctrlmode & CAN_CTRLMODE_FD) ? 64 : 8);
+	struct mcp2517fd_obj_rx *rxb[32], *rx;
+	int rx_count = 0;
+	u32 tsmin = -1, tsmax = 0;
 	int i, j;
 	int ret;
 
@@ -1843,6 +1949,7 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 			    (j < priv->rx_fifo_start + priv->rx_fifos) &&
 				    (mask & BIT(j));
 			    j++) {
+				/* clear the mask */
 				mask &= ~BIT(j);
 			}
 
@@ -1855,19 +1962,61 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 			if (ret)
 				return ret;
 
-			/* now handle those messages */
+			/* clear all the fifos in range */
+			if (use_bulk_release_fifos)
+				ret = mcp2517fd_bulk_release_fifos(spi,
+								   i, j);
+			else
+				ret = mcp2517fd_normal_release_fifos(spi,
+								     i, j);
+			if (ret)
+				return ret;
+
+			/* preprocess data */
 			for (; i < j ; i++) {
-				ret = mcp2517fd_can_ist_handle_rxfifo(
-					spi, i);
-				if (ret)
-					return ret;
+				/* store the fifo to process */
+				rx = (struct mcp2517fd_obj_rx *)
+					priv->fifo_data +
+					priv->fifo_address[i];
+				rxb[rx_count] = rx;
+				rx_count++;
+				/* increment usage */
+				priv->fifo_usage[i]++;
+				/* transform the data to system byte order */
+				rx->id = le32_to_cpu(rx->id);
+				rx->flags = le32_to_cpu(rx->flags);
+				rx->ts = le32_to_cpu(rx->ts);
+				/* and get tsmin/tsmax */
+				if (tsmin > rx->ts)
+					tsmin = rx->ts;
+				if (tsmax > rx->ts)
+					tsmax = rx->ts;
 			}
 		}
 	}
 
+	/*
+	 * now handle those messages in an ordered way
+	 * this could potentially get mixed with tef frames as well
+	 */
+	/* possibly realign timestamp so that they compare with overflow */
+	if (tsmin + BIT(30) < tsmax)
+		for (i = 0; i < rx_count ; i++) {
+			rxb[i]->ts += BIT(30);
+		}
+
+	/* sort the fifos by timestamp */
+	sort(rxb, rx_count, sizeof(*rxb), mcp2517fd_compare_rxobj_ts, NULL);
+
+	/* process the fifos */
+	for (i = 0; i < rx_count ; i++) {
+		ret = mcp2517fd_can_ist_handle_rxfifo(spi, rxb[i]);
+		if (ret)
+			return ret;
+	}
+
 	return 0;
 }
-
 
 static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
@@ -1971,6 +2120,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	int ret;
+
 
 	/* handle the rx */
 	if (priv->status.intf & CAN_INT_RXIF) {
