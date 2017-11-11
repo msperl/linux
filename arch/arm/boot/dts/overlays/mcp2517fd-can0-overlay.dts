@@ -27,7 +27,7 @@
         target = <&gpio>;
         __overlay__ {
             can0_pins: can0_pins {
-                brcm,pins = <25>;
+                brcm,pins = <16 17 18>;
                 brcm,function = <0>; /* input */
             };
         };
@@ -60,8 +60,12 @@
                 pinctrl-0 = <&can0_pins>;
                 spi-max-frequency = <20000000>;
                 interrupt-parent = <&gpio>;
-                interrupts = <25 0x2>;
+                interrupts = <16 0x2>;
                 clocks = <&can0_osc>;
+                microchip,clock_div = <1>;
+                microchip,clock_out_div = <4>;
+                microchip,gpio0_mode = <1>;
+                microchip,gpio1_mode = <1>;
             };
         };
     };
