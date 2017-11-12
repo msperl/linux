@@ -2811,7 +2811,15 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	SET_NETDEV_DEV(net, &spi->dev);
 
+
 	ret = mcp2517fd_hw_probe(spi);
+	/* on error retry a second time */
+	if (ret == -ENODEV) {
+		ret = mcp2517fd_hw_probe(spi);
+		if (!ret)
+			dev_info(&spi->dev,
+				 "found device only during retry\n");
+	}
 	if (ret) {
 		if (ret == -ENODEV)
 			dev_err(&spi->dev,
