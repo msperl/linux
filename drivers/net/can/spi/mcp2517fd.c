@@ -489,6 +489,9 @@
 #  define CAN_FIFOCON_TXAT_MASK					    \
 	GENMASK(CAN_FIFOCON_TXAT_SHIFT + CAN_FIFOCON_TXAT_BITS - 1, \
 		CAN_FIFOCON_TXAT_SHIFT)
+#  define CAN_FIFOCON_TXAT_ONE_SHOT	0
+#  define CAN_FIFOCON_TXAT_THREE_SHOT	1
+#  define CAN_FIFOCON_TXAT_UNLIMITED	2
 #  define CAN_FIFOCON_FSIZE_BITS	5
 #  define CAN_FIFOCON_FSIZE_SHIFT	24
 #  define CAN_FIFOCON_FSIZE_MASK					\
@@ -1562,15 +1565,23 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		return ret;
 
 	/* set up tx fifos */
+	val = CAN_FIFOCON_TXEN |
+		CAN_FIFOCON_FRESET | /* reset FIFO */
+		(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
+		(0 << CAN_FIFOCON_FSIZE_SHIFT); /* 1 FIFO only */
+
+	if (priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
+		val |= CAN_FIFOCON_TXAT_ONE_SHOT <<
+			CAN_FIFOCON_TXAT_SHIFT;
+	else
+		val |= CAN_FIFOCON_TXAT_UNLIMITED <<
+			CAN_FIFOCON_TXAT_SHIFT;
+
 	for (i = 0; i < priv->tx_fifos; i++) {
 		fifo = priv->tx_fifo_start + i;
 		ret = mcp2517fd_cmd_write(
 			spi, CAN_FIFOCON(fifo),
-			CAN_FIFOCON_FRESET | /* reset FIFO */
-			(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
-			(0 << CAN_FIFOCON_FSIZE_SHIFT) | /* 1 FIFO only */
-			(fifo << CAN_FIFOCON_TXPRI_SHIFT) | /* priority */
-			CAN_FIFOCON_TXEN,
+			val | (fifo << CAN_FIFOCON_TXPRI_SHIFT),
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
@@ -1755,7 +1766,7 @@ static int mcp2517fd_setup(struct net_device *net,
 	if (!(priv->can.ctrlmode & CAN_CTRLMODE_FD_NON_ISO))
 		priv->con_val |= CAN_CON_ISOCRCEN;
 	/* one shot */
-	if (!(priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT))
+	if (priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
 		priv->con_val |= CAN_CON_RTXAT;
 
 	/* setup fifos - this also puts the system into sleep mode */
@@ -2740,7 +2751,8 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		CAN_CTRLMODE_FD |
 		CAN_CTRLMODE_LOOPBACK |
 		CAN_CTRLMODE_LISTENONLY |
-		CAN_CTRLMODE_BERR_REPORTING;
+		CAN_CTRLMODE_BERR_REPORTING |
+		CAN_CTRLMODE_ONE_SHOT;
 
 	if (of_id)
 		priv->model = (enum mcp2517fd_model)of_id->data;
