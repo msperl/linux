@@ -595,24 +595,43 @@
 	GENMASK(CAN_EFF_EID_SHIFT + CAN_EFF_EID_BITS - 1,     \
 		CAN_EFF_EID_SHIFT)
 
-struct mcp2517fd_obj_tef {
+struct mcp2517fd_obj {
 	u32 id;
 	u32 flags;
-	u32 ts;
 };
 
 struct mcp2517fd_obj_tx {
-	u32 id;
-	u32 flags;
+	struct mcp2517fd_obj header;
 	u32 data[];
 };
 
-struct mcp2517fd_obj_rx {
+static void mcp2517fd_obj_to_le(struct mcp2517fd_obj *obj)
+{
+	obj->id = cpu_to_le32(obj->id);
+	obj->flags = cpu_to_le32(obj->flags);
+}
+
+struct mcp2517fd_obj_ts {
 	u32 id;
 	u32 flags;
 	u32 ts;
+};
+
+struct mcp2517fd_obj_tef {
+	struct mcp2517fd_obj_ts header;
+};
+
+struct mcp2517fd_obj_rx {
+	struct mcp2517fd_obj_ts header;
 	u8 data[];
 };
+
+static void mcp2517fd_obj_ts_from_le(struct mcp2517fd_obj_ts *obj)
+{
+	obj->id = le32_to_cpu(obj->id);
+	obj->flags = le32_to_cpu(obj->flags);
+	obj->ts = le32_to_cpu(obj->ts);
+}
 
 #define FIFO_DATA(x)			(0x400 + (x))
 #define FIFO_DATA_SIZE			0x800
@@ -757,6 +776,7 @@ MODULE_PARM_DESC(use_complete_fdfifo_read,
 		 "Use code that favours longer spi transfers "
 		 "(of unnecessary data) over multiple transfers for fd can");
 
+/* wrapper arround spi_sync, that sets speed_hz */
 static int mcp2517fd_sync_transfer(struct spi_device *spi,
 				 struct spi_transfer *xfer,
 				 unsigned int xfers,
@@ -770,6 +790,7 @@ static int mcp2517fd_sync_transfer(struct spi_device *spi,
 	return spi_sync_transfer(spi, xfer, xfers);
 }
 
+/* an optimization of spi_write_then_read that merges the transfers */
 static int mcp2517fd_write_then_read(struct spi_device *spi,
 				     const void* tx_buf,
 				     unsigned int tx_len,
@@ -817,6 +838,7 @@ static int mcp2517fd_write_then_read(struct spi_device *spi,
 	return ret;
 }
 
+/* simple spi_write wrapper with speed_hz */
 static int mcp2517fd_write(struct spi_device *spi,
 			   const void* tx_buf,
 			   unsigned int tx_len,
@@ -831,7 +853,7 @@ static int mcp2517fd_write(struct spi_device *spi,
 	return mcp2517fd_sync_transfer(spi, &xfer, 1, speed_hz);
 }
 
-
+/* spi_sync wrapper similar to spi_write_then_read that optimizes transfers */
 static int mcp2517fd_write_then_write(struct spi_device *spi,
 				     const void* tx_buf,
 				     unsigned int tx_len,
@@ -991,11 +1013,10 @@ static int mcp2517fd_transmit_message_common(
 	int ret;
 
 	/* add fifo as seq */
-	obj->flags |= fifo << CAN_OBJ_FLAGS_SEQ_SHIFT;
+	obj->header.flags |= fifo << CAN_OBJ_FLAGS_SEQ_SHIFT;
 
 	/* transform to le32 */
-	obj->id = cpu_to_le32(obj->id);
-	obj->flags = cpu_to_le32(obj->flags);
+	mcp2517fd_obj_to_le(&obj->header);
 
 	/* copy data to the right places- without leaking heap data */
 	memset(d, 0, sizeof(*d));
@@ -1043,17 +1064,20 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 {
 	struct mcp2517fd_obj_tx obj;
 	int dlc = can_len2dlc(frame->len);
+	u32 flags;
 
 	frame->len = can_dlc2len(dlc);
 
-	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.id, &obj.flags);
+	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.header.id, &flags);
 
-	obj.flags |= dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
-	obj.flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
-	obj.flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
-	obj.flags |= (frame->flags & CANFD_BRS) ? CAN_OBJ_FLAGS_BRS : 0;
-	obj.flags |= (frame->flags & CANFD_ESI) ? CAN_OBJ_FLAGS_ESI : 0;
-	obj.flags |= CAN_OBJ_FLAGS_FDF;
+	flags |= dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
+	flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
+	flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+	flags |= (frame->flags & CANFD_BRS) ? CAN_OBJ_FLAGS_BRS : 0;
+	flags |= (frame->flags & CANFD_ESI) ? CAN_OBJ_FLAGS_ESI : 0;
+	flags |= CAN_OBJ_FLAGS_FDF;
+
+	obj.header.flags = flags;
 
 	return mcp2517fd_transmit_message_common(
 		spi, fifo, &obj, frame->len, frame->data);
@@ -1063,15 +1087,18 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 				      struct can_frame *frame)
 {
 	struct mcp2517fd_obj_tx obj;
+	u32 flags;
 
 	if (frame->can_dlc > 8)
 		frame->can_dlc = 8;
 
-	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.id, &obj.flags);
+	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.header.id, &flags);
 
-	obj.flags |= frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
-	obj.flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
-	obj.flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+	flags |= frame->can_dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
+	flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
+	flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+
+	obj.header.flags = flags;
 
 	return mcp2517fd_transmit_message_common(
 		spi, fifo, &obj, frame->can_dlc, frame->data);
@@ -1764,6 +1791,7 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct canfd_frame *frame;
 	struct sk_buff *skb;
+	u32 flags = rx->header.flags;
 
 	/* allocate the skb buffer */
 	skb = alloc_canfd_skb(priv->net, &frame);
@@ -1773,11 +1801,11 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
                 return -ENOMEM;
         }
 
-	mcp2517fd_mcpid_to_canid(rx->id, rx->flags, &frame->can_id);
-	frame->flags |= (rx->flags & CAN_OBJ_FLAGS_BRS) ? CANFD_BRS : 0;
-	frame->flags |= (rx->flags & CAN_OBJ_FLAGS_ESI) ? CANFD_ESI : 0;
+	mcp2517fd_mcpid_to_canid(rx->header.id, flags, &frame->can_id);
+	frame->flags |= (flags & CAN_OBJ_FLAGS_BRS) ? CANFD_BRS : 0;
+	frame->flags |= (flags & CAN_OBJ_FLAGS_ESI) ? CANFD_ESI : 0;
 
-	frame->len = can_dlc2len((rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
+	frame->len = can_dlc2len((flags & CAN_OBJ_FLAGS_DLC_MASK)
 				 >> CAN_OBJ_FLAGS_DLC_SHIFT);
 
 	memcpy(frame->data, rx->data, frame->len);
@@ -1798,6 +1826,7 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct sk_buff *skb;
 	struct can_frame *frame;
+	u32 flags = rx->header.flags;
 	int len;
 
 	/* allocate the skb buffer */
@@ -1808,9 +1837,9 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
                 return -ENOMEM;
         }
 
-	mcp2517fd_mcpid_to_canid(rx->id, rx->flags, &frame->can_id);
+	mcp2517fd_mcpid_to_canid(rx->header.id, flags, &frame->can_id);
 
-	frame->can_dlc = (rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
+	frame->can_dlc = (flags & CAN_OBJ_FLAGS_DLC_MASK)
 		>> CAN_OBJ_FLAGS_DLC_SHIFT;
 
 	len = can_dlc2len(frame->can_dlc);
@@ -1917,32 +1946,32 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 }
 
 struct mcp2517fd_read_fifo_info {
-	struct mcp2517fd_obj_rx *rxb[32];
+	struct mcp2517fd_obj_ts *rxb[32];
 	int rx_count;
 	u32 tsmin;
 	u32 tsmax;
 } ;
 
 static int mcp2517fd_transform_rx(struct mcp2517fd_read_fifo_info *rfi,
-				   struct mcp2517fd_obj_rx *rx)
+				  struct mcp2517fd_obj_rx *rx)
 {
 	int dlc;
 
 	/* set pointer to received list */
-	rfi->rxb[rfi->rx_count] = rx;
+	rfi->rxb[rfi->rx_count] = &rx->header;
 	rfi->rx_count++;
 
 	/* transform the data to system byte order */
-	rx->id = le32_to_cpu(rx->id);
-	rx->flags = le32_to_cpu(rx->flags);
-	rx->ts = le32_to_cpu(rx->ts);
+	mcp2517fd_obj_ts_from_le(&rx->header);
+
 	/* and get tsmin/tsmax */
-	if (rfi->tsmin > rx->ts)
-		rfi->tsmin = rx->ts;
-	if (rfi->tsmax > rx->ts)
-		rfi->tsmax = rx->ts;
+	if (rfi->tsmin > rx->header.ts)
+		rfi->tsmin = rx->header.ts;
+	if (rfi->tsmax > rx->header.ts)
+		rfi->tsmax = rx->header.ts;
+
 	/* calc length */
-	dlc = (rx->flags & CAN_OBJ_FLAGS_DLC_MASK)
+	dlc = (rx->header.flags & CAN_OBJ_FLAGS_DLC_MASK)
 		>> CAN_OBJ_FLAGS_DLC_SHIFT;
 	return can_dlc2len(dlc);
 }
@@ -2115,10 +2144,10 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi,
 	return 0;
 }
 
-static int mcp2517fd_compare_rxobj_ts(const void *a, const void *b)
+static int mcp2517fd_compare_obj_ts(const void *a, const void *b)
 {
-	const struct mcp2517fd_obj_rx *rxa = a;
-	const struct mcp2517fd_obj_rx *rxb = b;
+	const struct mcp2517fd_obj_ts *rxa = a;
+	const struct mcp2517fd_obj_ts *rxb = b;
 	if (rxa->ts < rxb->ts)
 		return -1;
 	if (rxa->ts > rxb->ts)
@@ -2130,6 +2159,7 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct mcp2517fd_read_fifo_info rfi;
+	struct mcp2517fd_obj_rx *rx;
 	u32 mask = priv->status.rxif;
 	int i;
 	int ret;
@@ -2161,16 +2191,18 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 
 	/* sort the fifos by timestamp */
 	sort(rfi.rxb, rfi.rx_count, sizeof(*rfi.rxb),
-	     mcp2517fd_compare_rxobj_ts, NULL);
+	     mcp2517fd_compare_obj_ts, NULL);
 
 	/* process the recived fifos */
 	for (i = 0; i < rfi.rx_count ; i++) {
+		rx = container_of(rfi.rxb[i], struct mcp2517fd_obj_rx,
+				  header);
 		if (rfi.rxb[i]->flags & CAN_OBJ_FLAGS_FDF)
 			ret = mcp2517fd_can_transform_rx_fd(
-				spi, rfi.rxb[i]);
+				spi, rx);
 		else
 			ret = mcp2517fd_can_transform_rx_normal(
-				spi, rfi.rxb[i]);
+				spi, rx);
 		if (ret)
 			return ret;
 	}
@@ -2202,7 +2234,7 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 					CAN_TEFCON_UINC,
 					priv->spi_speed_hz);
 		/* and release it */
-		fifo = (tef.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
+		fifo = (tef.header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
 			CAN_OBJ_FLAGS_SEQ_SHIFT;
 		can_get_echo_skb(priv->net, fifo);
 
@@ -2350,8 +2382,6 @@ static int mcp2517fd_open(struct net_device *net)
 	struct spi_device *spi = priv->spi;
 	int ret;
 
-	dev_err(&spi->dev, "open: IRQ: %i\n", spi->irq);
-
 	ret = open_candev(net);
 	if (ret) {
 		dev_err(&spi->dev, "unable to set initial baudrate!\n");
@@ -2367,8 +2397,8 @@ static int mcp2517fd_open(struct net_device *net)
         priv->force_quit = 0;
 	ret = request_threaded_irq(spi->irq, NULL,
 				   mcp2517fd_can_ist,
-				   IRQF_ONESHOT | IRQF_TRIGGER_LOW,
-//				   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
+//				   IRQF_ONESHOT | IRQF_TRIGGER_LOW,
+				   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
 				   DEVICE_NAME, priv);
 	if (ret) {
 		dev_err(&spi->dev, "failed to acquire irq %d - %i\n",
@@ -2652,7 +2682,12 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	struct clk *clk;
 	int ret, freq;
 
-	dev_err(&spi->dev, "probe: IRQ: %i\n", spi->irq);
+	/* as irq_create_fwspec_mapping() can return 0, check for it */
+	if (spi->irq <= 0) {
+		dev_err(&spi->dev, "no valid irq line defined: irq = %i\n",
+			spi->irq);
+		return -EINVAL;
+	}
 
 	clk = devm_clk_get(&spi->dev, NULL);
 	if (IS_ERR(clk)) {
@@ -2798,7 +2833,6 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	devm_can_led_init(net);
 
-	dev_err(&spi->dev, "probe2: IRQ: %i\n", spi->irq);
 	netdev_info(net, "MCP%x successfully initialized.\n", priv->model);
 	return 0;
 
@@ -2819,8 +2853,6 @@ static int mcp2517fd_can_remove(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
-
-	dev_err(&spi->dev, "remove: IRQ: %i\n", spi->irq);
 
 	mcp2517fd_debugfs_remove(priv);
 
