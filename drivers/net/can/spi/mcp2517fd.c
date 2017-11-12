@@ -2752,6 +2752,7 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		CAN_CTRLMODE_LOOPBACK |
 		CAN_CTRLMODE_LISTENONLY |
 		CAN_CTRLMODE_BERR_REPORTING |
+		CAN_CTRLMODE_FD_NON_ISO |
 		CAN_CTRLMODE_ONE_SHOT;
 
 	if (of_id)
