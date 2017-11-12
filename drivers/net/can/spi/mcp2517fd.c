@@ -756,12 +756,15 @@ struct mcp2517fd_priv {
 	struct regulator *power;
 	struct regulator *transceiver;
 	struct clk *clk;
-	/* this should be sufficiently aligned - no idea how to force an u32 alignment here... */
+
+	u64 fifo_usage[32];
+
 	u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
 	u8 spi_tx[MCP2517FD_BUFFER_TXRX_SIZE];
 	u8 spi_rx[MCP2517FD_BUFFER_TXRX_SIZE];
 
-	u64 fifo_usage[32];
+	/* separate buffer for the fransmit case */
+	u8 spi_transmit_tx[2 + sizeof(struct mcp2517fd_obj_tx) + 64];
 };
 
 /* module parameters */
@@ -798,14 +801,15 @@ static int mcp2517fd_write_then_read(struct spi_device *spi,
 				     unsigned int rx_len,
 				     int speed_hz)
 {
-	static u8 *txrx;
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct spi_transfer xfer[2];
 	int ret;
 
-	memset(xfer, 0, sizeof(*xfer));
+	memset(xfer, 0, sizeof(xfer));
 
 	/* when using a halfduplex controller or to big for buffer */
-	if (spi->master->flags & SPI_MASTER_HALF_DUPLEX) {
+	if ((spi->master->flags & SPI_MASTER_HALF_DUPLEX) ||
+	    (tx_len + rx_len > sizeof(priv->spi_tx))) {
 		xfer[0].tx_buf = tx_buf;
 		xfer[0].len = tx_len;
 
@@ -815,27 +819,22 @@ static int mcp2517fd_write_then_read(struct spi_device *spi,
 		return mcp2517fd_sync_transfer(spi, xfer, 2, speed_hz);
 	}
 
-	txrx = kmalloc(MCP2517FD_BUFFER_TXRX_SIZE * 2, GFP_KERNEL | GFP_DMA);
-	if (! txrx)
-		return -ENOMEM;
-
 	/* full duplex optimization */
-	xfer[0].tx_buf = txrx;
-	xfer[0].rx_buf = txrx + MCP2517FD_BUFFER_TXRX_SIZE;
+	xfer[0].tx_buf = priv->spi_tx;
+	xfer[0].rx_buf = priv->spi_rx;
 	xfer[0].len = tx_len + rx_len;
 
 	/* copy and clean */
-	memcpy(txrx, tx_buf, tx_len);
-	memset(txrx + tx_len, 0, rx_len);
+	memcpy(priv->spi_tx, tx_buf, tx_len);
+	memset(priv->spi_tx + tx_len, 0, rx_len);
 
 	ret = mcp2517fd_sync_transfer(spi, xfer, 1, speed_hz);
+	if (ret)
+		return ret;
 
-	if (!ret)
-		memcpy(rx_buf, xfer[0].rx_buf + tx_len, rx_len);
+	memcpy(rx_buf, xfer[0].rx_buf + tx_len, rx_len);
 
-	kfree(txrx);
-
-	return ret;
+	return 0;
 }
 
 /* simple spi_write wrapper with speed_hz */
@@ -861,19 +860,18 @@ static int mcp2517fd_write_then_write(struct spi_device *spi,
 				     unsigned int tx2_len,
 				     int speed_hz)
 {
-	static u8 *txrx;
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct spi_transfer xfer;
 
-	txrx = kmalloc(tx_len + tx2_len, GFP_KERNEL | GFP_DMA);
-	if (! txrx)
-		return -ENOMEM;
+	if (tx_len + tx2_len > MCP2517FD_BUFFER_TXRX_SIZE)
+		return -EINVAL;
 
 	memset(&xfer, 0, sizeof(xfer));
 	xfer.len = tx_len + tx2_len;
-	xfer.tx_buf = txrx;
+	xfer.tx_buf = priv->spi_tx;
 
-	memcpy(txrx, tx_buf, tx_len);
-	memcpy(txrx + tx_len, tx2_buf, tx2_len);
+	memcpy(priv->spi_tx, tx_buf, tx_len);
+	memcpy(priv->spi_tx + tx_len, tx2_buf, tx2_len);
 
 	return mcp2517fd_sync_transfer(spi, &xfer, 1, speed_hz);
 }
@@ -1009,7 +1007,7 @@ static int mcp2517fd_transmit_message_common(
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	u32 addr = FIFO_DATA(priv->fifo_address[fifo]);
-	u8 d[2 + sizeof(*obj) + 64];
+	u8 *d = priv->spi_transmit_tx;
 	int ret;
 
 	/* add fifo as seq */
@@ -1024,7 +1022,7 @@ static int mcp2517fd_transmit_message_common(
 	memcpy(d + 2, obj, sizeof(*obj));
 	memcpy(d + 2 + sizeof(*obj), data, len);
 
-	/* transfers to FIFO RAM have to be multiple of 4 */
+	/* transfers to FIFO RAM has to be multiple of 4 */
 	len = 2 + sizeof(*obj) + ALIGN(len, 4);
 
 	/* fill the fifo */
