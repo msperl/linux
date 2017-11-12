@@ -2419,8 +2419,7 @@ static int mcp2517fd_open(struct net_device *net)
         priv->force_quit = 0;
 	ret = request_threaded_irq(spi->irq, NULL,
 				   mcp2517fd_can_ist,
-//				   IRQF_ONESHOT | IRQF_TRIGGER_LOW,
-				   IRQF_ONESHOT | IRQF_TRIGGER_FALLING,
+				   IRQF_ONESHOT | IRQF_TRIGGER_LOW,
 				   DEVICE_NAME, priv);
 	if (ret) {
 		dev_err(&spi->dev, "failed to acquire irq %d - %i\n",
