@@ -2374,6 +2374,19 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static int mcp2517fd_get_berr_counter(const struct net_device *net,
+				      struct can_berr_counter *bec)
+{
+        struct mcp2517fd_priv *priv = netdev_priv(net);
+
+	bec->txerr = (priv->status.bdiag0 & CAN_BDIAG0_DTERRCNT_MASK) >>
+		CAN_BDIAG0_DTERRCNT_SHIFT;
+	bec->rxerr = (priv->status.bdiag0 & CAN_BDIAG0_DRERRCNT_MASK) >>
+		CAN_BDIAG0_DRERRCNT_SHIFT;
+
+	return 0;
+}
+
 static int mcp2517fd_open(struct net_device *net)
 {
 	struct mcp2517fd_priv *priv = netdev_priv(net);
@@ -2721,12 +2734,13 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	priv->can.data_bittiming_const = &mcp2517fd_data_bittiming_const;
 	priv->can.do_set_data_bittiming = &mcp2517fd_do_set_data_bittiming;
 	priv->can.do_set_mode = mcp2517fd_do_set_mode;
+	priv->can.do_get_berr_counter = mcp2517fd_get_berr_counter;
 
 	priv->can.ctrlmode_supported =
 		CAN_CTRLMODE_FD |
 		CAN_CTRLMODE_LOOPBACK |
-		CAN_CTRLMODE_LISTENONLY;
-	/* CAN_CTRLMODE_BERR_REPORTING */
+		CAN_CTRLMODE_LISTENONLY |
+		CAN_CTRLMODE_BERR_REPORTING;
 
 	if (of_id)
 		priv->model = (enum mcp2517fd_model)of_id->data;
