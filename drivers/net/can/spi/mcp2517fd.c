@@ -679,27 +679,33 @@ struct mcp2517fd_priv {
 	struct can_priv	   can;
 	struct net_device *net;
 	struct spi_device *spi;
+
 	struct dentry *debugfs_dir;
 
-	struct workqueue_struct *wq;
+	/* the actual model of the mcp2517fd */
+	enum mcp2517fd_model model;
 
+	/* workqueue stuff */
+	struct workqueue_struct *wq;
 	struct work_struct tx_work;
 	struct sk_buff *tx_work_skb;
 
-
+	/* interrupt handler state and statistics */
 	u64 irq_loops;
 	u32 irq_state;
 #define IRQ_STATE_NEVER_RUN 0
 #define IRQ_STATE_RUNNING 1
 #define IRQ_STATE_HANDLED 2
 
+	/* status of the tx_queue */
 	u32 tx_queue_running;
 
-	enum mcp2517fd_model model;
+	/* clock configuration */
 	bool clock_pll;
 	bool clock_div2;
 	int  clock_odiv;
 
+	/* GPIO configuration */
 	enum mcp2517fd_gpio_mode  gpio0_mode;
 	enum mcp2517fd_gpio_mode  gpio1_mode;
 	bool gpio_opendrain;
@@ -709,29 +715,38 @@ struct mcp2517fd_priv {
 	/* flags that should stay in the con_register */
 	u32 con_val;
 
+	/* the distinc spi_speeds to use for spi communication */
 	u32 spi_setup_speed_hz;
 	u32 spi_speed_hz;
 
+	/* define payload size and mode */
 	int payload_size;
 	u8 payload_mode;
 
+	/* TEF addresses - start, end and current */
 	u32 tef_address_start;
 	u32 tef_address_end;
 	u32 tef_address;
 
+	/* address in mcp2517fd-Fifo RAM of each fifo */
 	u32 fifo_address[32];
 
+	/* infos on tx-fifos */
 	u8 tx_fifos;
 	u8 tx_fifo_start;
-	u32 tx_fifo_mask;
+	u32 tx_fifo_mask; /* bitmask of which fifo is a tx fifo */
 	u32 tx_pending_mask;
 
+	/* info on rx_fifos */
 	u8 rx_fifos;
 	u8 rx_fifo_depth;
 	u8 rx_fifo_start;
-	u32 rx_fifo_mask;
+	u32 rx_fifo_mask;  /* bitmask of which fifo is a rx fifo */
+
+	/* stats on number of rx overflows */
 	u64 rx_overflow;
 
+	/* the current status of the mcp2517fd */
 	struct {
 		u32 intf;
 		/* ASSERT(CAN_INT + 4 == CAN_RXIF) */
@@ -752,6 +767,7 @@ struct mcp2517fd_priv {
 		u32 bdiag1;
 	} status;
 
+	/* interrupt handler signaling */
 	int force_quit;
 	int after_suspend;
 #define AFTER_SUSPEND_UP 1
@@ -763,9 +779,13 @@ struct mcp2517fd_priv {
 	struct regulator *transceiver;
 	struct clk *clk;
 
+	/* statistics of FIFO usage */
 	u64 fifo_usage[32];
 
+	/* memory image of FIFO RAM on mcp2517fd */
 	u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
+
+	/* spi-tx/rx buffers for efficient transfers */
 	u8 spi_tx[MCP2517FD_BUFFER_TXRX_SIZE];
 	u8 spi_rx[MCP2517FD_BUFFER_TXRX_SIZE];
 
