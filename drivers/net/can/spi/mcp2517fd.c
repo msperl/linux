@@ -679,6 +679,7 @@ struct mcp2517fd_trigger_tx_message {
 	struct spi_message msg;
 	struct spi_transfer fill_xfer;
 	struct spi_transfer trigger_xfer;
+	int fifo;
 	char fill_cmd[2];
 	char fill_obj[sizeof(struct mcp2517fd_obj_tx)];
 	char fill_data[64];
@@ -696,11 +697,6 @@ struct mcp2517fd_priv {
 	/* the actual model of the mcp2517fd */
 	enum mcp2517fd_model model;
 
-	/* workqueue stuff */
-	struct workqueue_struct *wq;
-	struct work_struct tx_work;
-	struct sk_buff *tx_work_skb;
-
 	/* interrupt handler state and statistics */
 	u64 irq_loops;
 	u32 irq_state;
@@ -709,7 +705,7 @@ struct mcp2517fd_priv {
 #define IRQ_STATE_HANDLED 2
 
 	/* status of the tx_queue */
-	u32 tx_queue_running;
+	u32 tx_queue_status;
 
 	/* clock configuration */
 	bool clock_pll;
@@ -746,7 +742,9 @@ struct mcp2517fd_priv {
 	u8 tx_fifos;
 	u8 tx_fifo_start;
 	u32 tx_fifo_mask; /* bitmask of which fifo is a tx fifo */
+	u32 tx_submitted_mask;
 	u32 tx_pending_mask;
+	u32 tx_processed_mask;
 
 	/* info on rx_fifos */
 	u8 rx_fifos;
@@ -1040,6 +1038,20 @@ static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
 	return 0;
 }
 
+static void mcp2517fd_mark_tx_pending(void * context)
+{
+	struct mcp2517fd_trigger_tx_message *txm = context;
+	struct spi_device *spi = txm->msg.spi;
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/*
+	 * only here or in the irq handler this value is changed,
+	 * so there is no race condition and it does not require locking
+	 * serialization happens via spi_pump_message
+	 */
+	priv->tx_pending_mask |= BIT(txm->fifo);
+}
+
 static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 {
 	struct mcp2517fd_trigger_tx_message *txm;
@@ -1056,7 +1068,11 @@ static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 	for(i = 0; i < priv->tx_fifos; i++) {
 		fifo = priv->tx_fifo_start + i;
 		txm = &priv->spi_transmit_fifos[i];
+		/* prepare the message */
 		spi_message_init(&txm->msg);
+		txm->msg.complete = mcp2517fd_mark_tx_pending;
+		txm->msg.context = txm;
+		txm->fifo = fifo;
 		/* the payload itself */
 		txm->fill_xfer.speed_hz = priv->spi_speed_hz;
 		txm->fill_xfer.tx_buf = txm->fill_cmd;
@@ -1065,7 +1081,6 @@ static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 		mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE,
 					FIFO_DATA(priv->fifo_address[fifo]),
 					txm->fill_cmd);
-		dev_err(&priv->spi->dev,"FIFO %i - %02x %02x\n",fifo,txm->fill_cmd[0],txm->fill_cmd[1]);
 		spi_message_add_tail(&txm->fill_xfer, &txm->msg);
 		/* the trigger command */
 		txm->trigger_xfer.speed_hz = priv->spi_speed_hz;
@@ -1173,19 +1188,20 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 		spi, fifo, &obj, frame->can_dlc, frame->data);
 }
 
-static void mcp2517fd_tx_work_handler(struct work_struct *ws)
+static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
+					struct net_device *net)
 {
-        struct mcp2517fd_priv *priv = container_of(ws,
-						   struct mcp2517fd_priv,
-						   tx_work);
-        struct spi_device *spi = priv->spi;
-	struct sk_buff *skb = priv->tx_work_skb;
+        struct mcp2517fd_priv *priv = netdev_priv(net);
+	struct spi_device *spi = priv->spi;
+	u32 pending_mask;
 	int fifo;
 	int ret;
-	u32 pending_mask;
 
-	/* trying to avoid a workqueue */
-	pending_mask = priv->tx_pending_mask;
+	if (can_dropped_invalid_skb(net, skb))
+		return NETDEV_TX_OK;
+
+	/* get effective mask */
+	pending_mask = priv->tx_pending_mask | priv->tx_submitted_mask;
 
 	/* decide on fifo to assign */
 	if (pending_mask) {
@@ -1199,18 +1215,17 @@ static void mcp2517fd_tx_work_handler(struct work_struct *ws)
 		dev_err(&spi->dev,
 			"reached tx-fifo %i, which is not valid\n",
 			fifo);
-		return;
+		return NETDEV_TX_BUSY;
 	}
 
-	/* decide if we can reactivate the queue */
-	priv->tx_work_skb = NULL;
-	if (fifo > priv->tx_fifo_start) {
-		priv->tx_queue_running = 1;
-		netif_start_queue(priv->net);
+	/* if we are the last one, then stop the queue */
+	if (fifo == priv->tx_fifo_start) {
+		priv->tx_queue_status = 0;
+		netif_stop_queue(priv->net);
 	}
 
 	/* mark as pending */
-	priv->tx_pending_mask |= BIT(fifo);
+	priv->tx_submitted_mask |= BIT(fifo);
 	priv->fifo_usage[fifo]++;
 
 	/* now process it for real */
@@ -1222,31 +1237,11 @@ static void mcp2517fd_tx_work_handler(struct work_struct *ws)
 			spi, fifo, (struct can_frame *)skb->data);
 
 	/* keep it for reference until the message really got transmitted */
-	if (ret == NETDEV_TX_OK)
+	if (ret == NETDEV_TX_OK) {
 		can_put_echo_skb(skb, priv->net, fifo);
-}
-
-static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
-					struct net_device *net)
-{
-        struct mcp2517fd_priv *priv = netdev_priv(net);
-	struct spi_device *spi = priv->spi;
-
-        if (priv->tx_work_skb) {
-		dev_warn(&spi->dev, "hard_xmit called while tx busy\n");
-		return NETDEV_TX_BUSY;
 	}
 
-	if (can_dropped_invalid_skb(net, skb))
-		return NETDEV_TX_OK;
-
-	netif_stop_queue(net);
-	priv->tx_queue_running = 0;
-
-	priv->tx_work_skb = skb;
-	queue_work(priv->wq, &priv->tx_work);
-
-	return NETDEV_TX_OK;
+	return ret;
 }
 
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
@@ -2300,27 +2295,39 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
 	struct mcp2517fd_obj_tef tef;
-	u32 mask = 0;
-	int i, count, ret, fifo;
+	u32 pending = priv->tx_pending_mask & (~priv->tx_processed_mask);
+	int do_start = 0;
+	int i, count, fifo;
+	int ret;
 
 	/* calculate the number of fifos that have been processed */
-	count = hweight_long(priv->tx_pending_mask);
+	count = hweight_long(pending);
 	count -= hweight_long(priv->status.txreq);
 
 	/* now clear TEF for each */
-	for(i = 0; i < count; i++) {
+	for(i = priv->tx_fifo_start;
+	    i < priv->tx_fifo_start + priv->tx_fifos;
+	    i++) {
+		if (!(pending & BIT(i)))
+			continue;
+		/* read all the important data */
 		ret = mcp2517fd_cmd_readn(spi,
 					  FIFO_DATA(priv->tef_address),
 					  &tef, sizeof(tef),
 					  priv->spi_speed_hz);
+
+		/* increment the counter to read next */
 		ret = mcp2517fd_cmd_write_mask(spi,
 					CAN_TEFCON,
 					CAN_TEFCON_UINC,
 					CAN_TEFCON_UINC,
 					priv->spi_speed_hz);
+
 		/* and release it */
 		fifo = (tef.header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
 			CAN_OBJ_FLAGS_SEQ_SHIFT;
+		/* for some reason the above fails - needs to get investigated */
+		fifo = i;
 		can_get_echo_skb(priv->net, fifo);
 
 		/* increment tef */
@@ -2329,15 +2336,26 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 			priv->tef_address = priv->tef_address_start;
 
 		/* and set mask */
-		mask |= BIT(fifo);
+		priv->tx_processed_mask |= BIT(fifo);
 
 		net->stats.tx_packets++;
 		net->stats.tx_bytes += 0/* TODO */;
 		can_led_event(net, CAN_LED_EVENT_TX);
+
+		if (fifo == priv->tx_fifo_start)
+			do_start = 1;
 	}
 
-	/* release fifos for the future */
-	priv->tx_pending_mask &= ~mask;
+	/* restart the queue */
+	if (do_start) {
+		/* nothing should be left pending /in flight now... */
+		priv->tx_pending_mask = 0;
+		priv->tx_submitted_mask = 0;
+		priv->tx_processed_mask = 0;
+		priv->tx_queue_status = 1;
+		/* wake queue now */
+		netif_wake_queue(net);
+	}
 
 	return 0;
 }
@@ -2505,10 +2523,6 @@ static int mcp2517fd_open(struct net_device *net)
 		goto open_unlock;
 	}
 
-        priv->wq = alloc_workqueue("mcp2517fd_wq", WQ_FREEZABLE | WQ_MEM_RECLAIM,
-				   0);
-	INIT_WORK(&priv->tx_work, mcp2517fd_tx_work_handler);
-
 	ret = mcp2517fd_hw_probe(spi);
 	if (ret) {
 		mcp2517fd_open_clean(net);
@@ -2531,7 +2545,7 @@ static int mcp2517fd_open(struct net_device *net)
 
 	can_led_event(net, CAN_LED_EVENT_OPEN);
 
-	priv->tx_queue_running = 1;
+	priv->tx_queue_status = 1;
 	netif_wake_queue(net);
 
 open_unlock:
@@ -2565,8 +2579,6 @@ static int mcp2517fd_stop(struct net_device *net)
 
 	priv->force_quit = 1;
 	free_irq(spi->irq, priv);
-	destroy_workqueue(priv->wq);
-	priv->wq = NULL;
 
 	/* Disable and clear pending interrupts */
 	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
@@ -2622,7 +2634,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	root = priv-> debugfs_dir;
 
 	rx = debugfs_create_dir("rx", root);
-	tx = debugfs_create_dir("rx", root);
+	tx = debugfs_create_dir("tx", root);
 	fifousage = debugfs_create_dir("fifo_usage", root);
 	fifoaddr = debugfs_create_dir("fifo_address", root);
 	status = debugfs_create_dir("status", root);
@@ -2630,9 +2642,6 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	/* add irq state info */
 	debugfs_create_u64("irq_loops", 0444, root, &priv->irq_loops);
 	debugfs_create_u32("irq_state", 0444, root, &priv->irq_state);
-
-	debugfs_create_u32("tx_queue_running", 0444, root,
-			   &priv->tx_queue_running);
 
 	/* export the status structure */
 	debugfs_create_x32("intf", 0444, status, &priv->status.intf);
@@ -2654,7 +2663,14 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_u8("fifo_start", 0444, tx, &priv->tx_fifo_start);
 	debugfs_create_u8("fifo_count", 0444, tx, &priv->tx_fifos);
 	debugfs_create_x32("fifo_mask", 0444, tx, &priv->tx_fifo_mask);
-	debugfs_create_x32("fifo_pending", 0444, tx, &priv->tx_pending_mask);
+	debugfs_create_x32("fifo_pending", 0444, tx,
+			   &priv->tx_pending_mask);
+	debugfs_create_x32("fifo_submitted", 0444, tx,
+			   &priv->tx_submitted_mask);
+	debugfs_create_x32("fifo_processed", 0444, tx,
+			   &priv->tx_processed_mask);
+	debugfs_create_u32("queue_status", 0444, tx,
+			   &priv->tx_queue_status);
 
 	debugfs_create_u32("fifo_max_payload_size", 0444, root,
 			   &priv->payload_size);
