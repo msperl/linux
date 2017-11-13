@@ -686,11 +686,14 @@ struct mcp2517fd_priv {
 	struct work_struct tx_work;
 	struct sk_buff *tx_work_skb;
 
+
 	u64 irq_loops;
 	u32 irq_state;
 #define IRQ_STATE_NEVER_RUN 0
 #define IRQ_STATE_RUNNING 1
 #define IRQ_STATE_HANDLED 2
+
+	u32 tx_queue_running;
 
 	enum mcp2517fd_model model;
 	bool clock_pll;
@@ -1136,8 +1139,10 @@ static void mcp2517fd_tx_work_handler(struct work_struct *ws)
 
 	/* decide if we can reactivate the queue */
 	priv->tx_work_skb = NULL;
-	if (fifo > priv->tx_fifo_start)
+	if (fifo > priv->tx_fifo_start) {
+		priv->tx_queue_running = 1;
 		netif_start_queue(priv->net);
+	}
 
 	/* mark as pending */
 	priv->tx_pending_mask |= BIT(fifo);
@@ -1171,6 +1176,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 
 	netif_stop_queue(net);
+	priv->tx_queue_running = 0;
 
 	priv->tx_work_skb = skb;
 	queue_work(priv->wq, &priv->tx_work);
@@ -2455,6 +2461,7 @@ static int mcp2517fd_open(struct net_device *net)
 
 	can_led_event(net, CAN_LED_EVENT_OPEN);
 
+	priv->tx_queue_running = 1;
 	netif_wake_queue(net);
 
 open_unlock:
@@ -2550,6 +2557,9 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	/* add irq state info */
 	debugfs_create_u64("irq_loops", 0444, root, &priv->irq_loops);
 	debugfs_create_u32("irq_state", 0444, root, &priv->irq_state);
+
+	debugfs_create_u32("tx_queue_running", 0444, root,
+			   &priv->tx_queue_running);
 
 	/* export the status structure */
 	debugfs_create_x32("intf", 0444, status, &priv->status.intf);
