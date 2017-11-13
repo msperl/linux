@@ -1702,7 +1702,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	priv->tef_address = val;
 	priv->tef_address_start = val;
 	priv->tef_address_end = priv->tef_address_start +
-		(priv->tx_fifos + 1) * sizeof(struct mcp2517fd_obj_tef) -
+		(priv->tx_fifos) * sizeof(struct mcp2517fd_obj_tef) -
 		1;
 
 	/* get all the relevant addresses for the transmit fifos */
@@ -2326,8 +2326,6 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 		/* and release it */
 		fifo = (tef.header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
 			CAN_OBJ_FLAGS_SEQ_SHIFT;
-		/* for some reason the above fails - needs to get investigated */
-		fifo = i;
 		can_get_echo_skb(priv->net, fifo);
 
 		/* increment tef */
