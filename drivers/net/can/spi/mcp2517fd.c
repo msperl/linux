@@ -675,6 +675,17 @@ enum mcp2517fd_gpio_mode {
 	gpio_mode_in		= MCP2517FD_IOCON_PM0 | MCP2517FD_IOCON_TRIS0
 };
 
+struct mcp2517fd_trigger_tx_message {
+	struct spi_message msg;
+	struct spi_transfer fill_xfer;
+	struct spi_transfer trigger_xfer;
+	char fill_cmd[2];
+	char fill_obj[sizeof(struct mcp2517fd_obj_tx)];
+	char fill_data[64];
+	char trigger_cmd[2];
+	char trigger_data;
+};
+
 struct mcp2517fd_priv {
 	struct can_priv	   can;
 	struct net_device *net;
@@ -791,6 +802,8 @@ struct mcp2517fd_priv {
 
 	/* separate buffer for the fransmit case */
 	u8 spi_transmit_tx[2 + sizeof(struct mcp2517fd_obj_tx) + 64];
+	/* structure for transmit fifo spi_messages */
+	struct mcp2517fd_trigger_tx_message *spi_transmit_fifos;
 };
 
 /* module parameters */
@@ -1027,13 +1040,54 @@ static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
 	return 0;
 }
 
+static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
+{
+	struct mcp2517fd_trigger_tx_message *txm;
+	int i, fifo;
+	const u32 trigger = CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC;
+	const int first_byte = (ffs(trigger) - 1)  >> 3;
+
+	priv->spi_transmit_fifos = kzalloc(
+		sizeof(*priv->spi_transmit_fifos) * priv->tx_fifos,
+		GFP_KERNEL | GFP_DMA);
+	if (!priv->spi_transmit_fifos)
+		return -ENOMEM;
+
+	for(i = 0; i < priv->tx_fifos; i++) {
+		fifo = priv->tx_fifo_start + i;
+		txm = &priv->spi_transmit_fifos[i];
+		spi_message_init(&txm->msg);
+		/* the payload itself */
+		txm->fill_xfer.speed_hz = priv->spi_speed_hz;
+		txm->fill_xfer.tx_buf = txm->fill_cmd;
+		txm->fill_xfer.len = 2;
+		txm->fill_xfer.cs_change = true;
+		mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE,
+					FIFO_DATA(priv->fifo_address[fifo]),
+					txm->fill_cmd);
+		dev_err(&priv->spi->dev,"FIFO %i - %02x %02x\n",fifo,txm->fill_cmd[0],txm->fill_cmd[1]);
+		spi_message_add_tail(&txm->fill_xfer, &txm->msg);
+		/* the trigger command */
+		txm->trigger_xfer.speed_hz = priv->spi_speed_hz;
+		txm->trigger_xfer.tx_buf = txm->trigger_cmd;
+		txm->trigger_xfer.len = 3;
+		mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE,
+					CAN_FIFOCON(fifo) + first_byte,
+					txm->trigger_cmd);
+		txm->trigger_data = trigger >> (8 * first_byte);
+		spi_message_add_tail(&txm->trigger_xfer, &txm->msg);
+	}
+
+	return 0;
+}
+
 static int mcp2517fd_transmit_message_common(
 	struct spi_device *spi, int fifo,
 	struct mcp2517fd_obj_tx *obj, int len, u8 *data)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u32 addr = FIFO_DATA(priv->fifo_address[fifo]);
-	u8 *d = priv->spi_transmit_tx;
+	struct mcp2517fd_trigger_tx_message *txm =
+		&priv->spi_transmit_fifos[fifo - priv->tx_fifo_start];
 	int ret;
 
 	/* add fifo as seq */
@@ -1042,25 +1096,16 @@ static int mcp2517fd_transmit_message_common(
 	/* transform to le32 */
 	mcp2517fd_obj_to_le(&obj->header);
 
-	/* copy data to the right places- without leaking heap data */
-	memset(d, 0, sizeof(*d));
-	mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE,addr, d);
-	memcpy(d + 2, obj, sizeof(*obj));
-	memcpy(d + 2 + sizeof(*obj), data, len);
+	/* fill in details */
+	memcpy(txm->fill_obj, obj, sizeof(*obj));
+	memset(txm->fill_data, 0, sizeof(*txm->fill_data));
+	memcpy(txm->fill_data + sizeof(*obj), data, len);
 
 	/* transfers to FIFO RAM has to be multiple of 4 */
-	len = 2 + sizeof(*obj) + ALIGN(len, 4);
+	txm->fill_xfer.len = 2 + sizeof(*obj) + ALIGN(len, 4);
 
-	/* fill the fifo */
-	ret = mcp2517fd_write(spi, d, len, priv->spi_speed_hz);
-	if (ret)
-		return NETDEV_TX_BUSY;
-
-	/* and trigger it */
-	ret = mcp2517fd_cmd_write_mask(spi, CAN_FIFOCON(fifo),
-				       CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC,
-				       CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC,
-				       priv->spi_speed_hz);
+	/* and transmit asyncroniously */
+	ret = spi_async(spi, &txm->msg);
 	if (ret)
 		return NETDEV_TX_BUSY;
 
@@ -1674,6 +1719,11 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 			return ret;
 		priv->fifo_address[fifo] = val;
 	}
+
+	/* and prepare the spi_messages */
+	ret = mcp2517fd_fill_spi_transmit_fifos(priv);
+	if (ret)
+		return ret;
 
 	/* get all the relevant addresses for the rx fifos */
 	for (i = 0; i < priv->rx_fifos; i++) {
@@ -2509,6 +2559,9 @@ static int mcp2517fd_stop(struct net_device *net)
 	struct spi_device *spi = priv->spi;
 
 	close_candev(net);
+
+	kfree(priv->spi_transmit_fifos);
+	priv->spi_transmit_fifos = NULL;
 
 	priv->force_quit = 1;
 	free_irq(spi->irq, priv);
