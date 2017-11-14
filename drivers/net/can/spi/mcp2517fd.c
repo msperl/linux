@@ -2079,11 +2079,22 @@ static int mcp2517fd_compare_obj_ts(const void *a, const void *b)
 static int mcp2517fd_process_queued_tef(struct spi_device *spi,
 					struct mcp2517fd_obj_ts *obj)
 {
-	/*
-	struct mcp2517fd_obj_trf *tef = container_of(
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_obj_tef *tef = container_of(
 		obj, struct mcp2517fd_obj_tef, header);
-	*/
-	dev_err(&spi->dev,"Queued TEF - %08x\n", obj->flags);
+	int dlc = (obj->flags & CAN_OBJ_FLAGS_DLC_MASK)
+		>> CAN_OBJ_FLAGS_DLC_SHIFT;
+	int fifo = (tef->header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
+		CAN_OBJ_FLAGS_SEQ_SHIFT;
+
+	/* update counters */
+	priv->net->stats.tx_packets++;
+	priv->net->stats.tx_bytes += can_dlc2len(dlc);
+
+	/* release it */
+	can_get_echo_skb(priv->net, fifo);
+
+	can_led_event(priv->net, CAN_LED_EVENT_TX);
 
 	return 0;
 }
@@ -2345,7 +2356,7 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
-	struct mcp2517fd_obj_tef tef;
+	struct mcp2517fd_obj_tef *tef;
 	u32 pending = priv->tx_pending_mask & (~priv->tx_processed_mask);
 	int do_start = 0;
 	int i, count, fifo;
@@ -2356,15 +2367,19 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	count -= hweight_long(priv->status.txreq);
 
 	/* now clear TEF for each */
+	/* TODO: optimize for BULK reads, as we know COUNT */
 	for(i = priv->tx_fifo_start;
 	    i < priv->tx_fifo_start + priv->tx_fifos;
 	    i++) {
 		if (!(pending & BIT(i)))
 			continue;
-		/* read all the important data */
+		/* calc address in address space */
+		tef = (struct mcp2517fd_obj_tef *)(priv->fifo_data +
+						   priv->tef_address);
+		/* read all the object data */
 		ret = mcp2517fd_cmd_readn(spi,
 					  FIFO_DATA(priv->tef_address),
-					  &tef, sizeof(tef),
+					  tef, sizeof(*tef),
 					  priv->spi_speed_hz);
 
 		/* increment the counter to read next */
@@ -2374,22 +2389,23 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 					CAN_TEFCON_UINC,
 					priv->spi_speed_hz);
 
-		/* and release it */
-		fifo = (tef.header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
+		/* transform the data to system byte order */
+		mcp2517fd_obj_ts_from_le(&tef->header);
+
+		fifo = (tef->header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
 			CAN_OBJ_FLAGS_SEQ_SHIFT;
-		can_get_echo_skb(priv->net, fifo);
+
+		/* submit to queue */
+		tef->header.flags |= CAN_OBJ_FLAGS_CUSTOM_ISTEF;
+		mcp2517fd_addto_queued_fifos(spi, &tef->header);
 
 		/* increment tef */
-		priv->tef_address += sizeof(tef);
+		priv->tef_address += sizeof(*tef);
 		if (priv->tef_address > priv->tef_address_end)
 			priv->tef_address = priv->tef_address_start;
 
 		/* and set mask */
 		priv->tx_processed_mask |= BIT(fifo);
-
-		net->stats.tx_packets++;
-		net->stats.tx_bytes += 0/* TODO */;
-		can_led_event(net, CAN_LED_EVENT_TX);
 
 		if (fifo == priv->tx_fifo_start)
 			do_start = 1;
