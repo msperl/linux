@@ -2554,10 +2554,10 @@ static int mcp2517fd_get_berr_counter(const struct net_device *net,
 {
         struct mcp2517fd_priv *priv = netdev_priv(net);
 
-	bec->txerr = (priv->status.bdiag0 & CAN_BDIAG0_DTERRCNT_MASK) >>
-		CAN_BDIAG0_DTERRCNT_SHIFT;
-	bec->rxerr = (priv->status.bdiag0 & CAN_BDIAG0_DRERRCNT_MASK) >>
-		CAN_BDIAG0_DRERRCNT_SHIFT;
+	bec->txerr = (priv->status.trec & CAN_TREC_TEC_MASK) >>
+		CAN_TREC_TEC_SHIFT;
+	bec->rxerr = (priv->status.trec & CAN_TREC_REC_MASK) >>
+		CAN_TREC_REC_SHIFT;
 
 	return 0;
 }
