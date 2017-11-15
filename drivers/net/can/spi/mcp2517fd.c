@@ -392,7 +392,7 @@
 #  define CAN_BDIAG1_DBIT0ERR		BIT(24)
 #  define CAN_BDIAG1_DBIT1ERR		BIT(25)
 #  define CAN_BDIAG1_DFORMERR		BIT(27)
-#  define CAN_BDIAG1_STUFERR		BIT(28)
+#  define CAN_BDIAG1_DSTUFERR		BIT(28)
 #  define CAN_BDIAG1_DCRCERR		BIT(29)
 #  define CAN_BDIAG1_ESI		BIT(30)
 #  define CAN_BDIAG1_DLCMM		BIT(31)
@@ -600,6 +600,17 @@
 	GENMASK(CAN_EFF_EID_SHIFT + CAN_EFF_EID_BITS - 1,     \
 		CAN_EFF_EID_SHIFT)
 
+static const char *mcp2517fd_mode_names[] = {
+	[CAN_CON_MODE_MIXED] = "can2.0+canfd",
+	[CAN_CON_MODE_SLEEP] = "sleep",
+	[CAN_CON_MODE_INTERNAL_LOOPBACK] = "internal loopback",
+	[CAN_CON_MODE_LISTENONLY] = "listen only",
+	[CAN_CON_MODE_CONFIG] = "config",
+	[CAN_CON_MODE_EXTERNAL_LOOPBACK] = "external loopback",
+	[CAN_CON_MODE_CAN2_0] = "can2.0",
+	[CAN_CON_MODE_RESTRICTED] = "restricted"
+};
+
 struct mcp2517fd_obj {
 	u32 id;
 	u32 flags;
@@ -728,10 +739,7 @@ struct mcp2517fd_priv {
 	bool txcan_opendrain;
 	bool int_opendrain;
 
-	/* flags that should stay in the con_register */
-	u32 con_val;
-
-	/* the distinc spi_speeds to use for spi communication */
+	/* the distinct spi_speeds to use for spi communication */
 	u32 spi_setup_speed_hz;
 	u32 spi_speed_hz;
 
@@ -785,6 +793,17 @@ struct mcp2517fd_priv {
 		u32 bdiag1;
 	} status;
 
+	/* configuration registers */
+	struct {
+		u32 osc;
+		u32 ecccon;
+		u32 con;
+		u32 iocon;
+		u32 tdc;
+		u32 tscon;
+		u32 tefcon;
+	} regs;
+
 	/* interrupt handler signaling */
 	int force_quit;
 	int after_suspend;
@@ -796,6 +815,20 @@ struct mcp2517fd_priv {
 	struct regulator *power;
 	struct regulator *transceiver;
 	struct clk *clk;
+
+	/* interrupt flags during irq handling */
+	u32 int_clear_mask;
+	u32 int_clear_value;
+	u32 bdiag1_clear_mask;
+	u32 bdiag1_clear_value;
+
+	/* composit error id and dataduring irq handling */
+	u32 can_err_id;
+	u32 can_err_data[8];
+
+	/* the current mode */
+	u32 active_can_mode;
+	u32 new_state;
 
 	/* statistics of FIFO usage */
 	u64 fifo_usage[32];
@@ -1346,15 +1379,26 @@ static void mcp2517fd_open_clean(struct net_device *net)
 static int mcp2517fd_disable_interrupts(struct spi_device *spi,
 					u32 speed_hz)
 {
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	priv->status.intf = 0;
 	return mcp2517fd_cmd_write(spi, CAN_INT, 0, speed_hz);
 }
 
 static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 				       u32 speed_hz)
 {
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	priv->status.intf = CAN_INT_TEFIE |
+		CAN_INT_RXIE |
+		CAN_INT_MODIE |
+		CAN_INT_SERRIF |
+		CAN_INT_IVMIF |
+		CAN_INT_CERRIF |
+		CAN_INT_ECCIF;
 	return mcp2517fd_cmd_write(spi, CAN_INT,
-				   CAN_INT_TEFIE |
-				   CAN_INT_RXIE,
+				   priv->status.intf,
 				   speed_hz);
 }
 
@@ -1470,25 +1514,28 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 static int mcp2517fd_set_normal_mode(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	int type = 0;
 	int ret;
 
 	if (priv->can.ctrlmode & CAN_CTRLMODE_LOOPBACK)
-		type = CAN_CON_MODE_EXTERNAL_LOOPBACK;
+		priv->active_can_mode = CAN_CON_MODE_EXTERNAL_LOOPBACK;
 	else if (priv->can.ctrlmode & CAN_CTRLMODE_LISTENONLY)
-		type = CAN_CON_MODE_LISTENONLY;
+		priv->active_can_mode = CAN_CON_MODE_LISTENONLY;
 	else if (priv->can.ctrlmode & CAN_CTRLMODE_FD)
-		type = CAN_CON_MODE_MIXED;
+		priv->active_can_mode = CAN_CON_MODE_MIXED;
 	else
-		type = CAN_CON_MODE_CAN2_0;
+		priv->active_can_mode = CAN_CON_MODE_CAN2_0;
 
 	/* set mode to normal */
+	priv->regs.con = (priv->regs.con & ~CAN_CON_REQOP_MASK) |
+		(priv->active_can_mode << CAN_CON_REQOP_SHIFT);
+
 	ret = mcp2517fd_cmd_write(spi, CAN_CON,
-				  priv->con_val |
-				  (type << CAN_CON_REQOP_SHIFT),
+				  priv->regs.con,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
+
+	priv->can.state = CAN_STATE_ERROR_ACTIVE;
 
 	return 0;
 }
@@ -1543,11 +1590,12 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 	/* wait for synced pll/osc/sclk */
 	timeout = jiffies + MCP2517FD_OSC_POLLING_JIFFIES;
 	while(jiffies <= timeout) {
-		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC, &val,
+		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+					 &priv->regs.osc,
 					 priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-		if ((val & waitfor) == waitfor)
+		if ((priv->regs.osc & waitfor) == waitfor)
 			return 0;
 	}
 
@@ -1562,7 +1610,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				struct mcp2517fd_priv *priv,
 				struct spi_device *spi)
 {
-	u32 con_val = priv->con_val;
+	u32 con_val = priv->regs.con & (~CAN_CON_REQOP_MASK);
 	u32 val;
 	int ret;
 	int i, fifo;
@@ -1630,12 +1678,14 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* set up TEF SIZE to the number of tx_fifos and IRQ */
-	ret = mcp2517fd_cmd_write(
-		spi, CAN_TEFCON,
-		CAN_TEFCON_FRESET |
+	priv->regs.tefcon = CAN_TEFCON_FRESET |
 		CAN_TEFCON_TEFNEIE |
 		CAN_TEFCON_TEFTSEN |
 		((priv->tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT),
+
+	ret = mcp2517fd_cmd_write(
+		spi, CAN_TEFCON,
+		priv->regs.tefcon,
 		priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
@@ -1764,8 +1814,9 @@ static int mcp2517fd_setup(struct net_device *net,
 		return ret;
 
 	/* set up RAM ECC (but for now without interrupts) */
+	priv->regs.ecccon = MCP2517FD_ECCCON_ECCEN;
 	ret = mcp2517fd_cmd_write(spi, MCP2517FD_ECCCON,
-				  MCP2517FD_ECCCON_ECCEN,
+				  priv->regs.ecccon,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
@@ -1817,13 +1868,15 @@ static int mcp2517fd_setup(struct net_device *net,
 	if (priv->int_opendrain)
 		val |= MCP2517FD_IOCON_INTOD; /* OpenDrain INT pins */
 
+	priv->regs.iocon = val;
 	ret = mcp2517fd_cmd_write(spi, MCP2517FD_IOCON, val,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
 	/* set up Transmitter Delay compensation */
-	ret = mcp2517fd_cmd_write(spi, CAN_TDC, CAN_TDC_EDGFLTEN,
+	priv->regs.tdc = CAN_TDC_EDGFLTEN;
+	ret = mcp2517fd_cmd_write(spi, CAN_TDC, priv->regs.tdc,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
@@ -1833,25 +1886,23 @@ static int mcp2517fd_setup(struct net_device *net,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-	val = CAN_TSCON_TBCEN |
+	priv->regs.tscon = CAN_TSCON_TBCEN |
 		((priv->can.clock.freq / 1000000)
 		 << CAN_TSCON_TBCPRE_SHIFT);
 	ret = mcp2517fd_cmd_write(spi, CAN_TSCON,
-				  CAN_TSCON_TBCEN |
-				  ((priv->can.clock.freq / 1000000)
-				   << CAN_TSCON_TBCPRE_SHIFT),
+				  priv->regs.tscon,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
 	/* setup value of con_register */
-	priv->con_val = CAN_CON_STEF /* enable TEF */;
+	priv->regs.con = CAN_CON_STEF /* enable TEF */;
 	/* non iso FD mode */
 	if (!(priv->can.ctrlmode & CAN_CTRLMODE_FD_NON_ISO))
-		priv->con_val |= CAN_CON_ISOCRCEN;
+		priv->regs.con |= CAN_CON_ISOCRCEN;
 	/* one shot */
 	if (priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
-		priv->con_val |= CAN_CON_RTXAT;
+		priv->regs.con |= CAN_CON_RTXAT;
 
 	/* setup fifos - this also puts the system into sleep mode */
 	ret = mcp2517fd_setup_fifo(net, priv, spi);
@@ -2425,16 +2476,16 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	return 0;
 }
 
-static void mcp2517fd_error_skb(struct net_device *net,
-			       int can_id, int data1)
+static void mcp2517fd_error_skb(struct net_device *net)
 {
+	struct mcp2517fd_priv *priv = netdev_priv(net);
 	struct sk_buff *skb;
 	struct can_frame *frame;
 
 	skb = alloc_can_err_skb(net, &frame);
 	if (skb) {
-		frame->can_id = can_id;
-		frame->data[1] = data1;
+		frame->can_id = priv->can_err_id;
+		memcpy(frame->data, priv->can_err_data, 8);
 		netif_rx_ni(skb);
 	} else {
 		netdev_err(net, "cannot allocate error skb\n");
@@ -2445,8 +2496,6 @@ static int mcp2517fd_can_ist_handle_rxovif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	u32 mask = priv->status.rxovif;
-	int canid = 0;
-	int data1 = 0;
 	int i;
 	int ret;
 
@@ -2464,14 +2513,102 @@ static int mcp2517fd_can_ist_handle_rxovif(struct spi_device *spi)
 			priv->net->stats.rx_over_errors++;
 			priv->net->stats.rx_errors++;
 			priv->rx_overflow++;
-			canid |= CAN_ERR_CRTL;
-			data1 |= CAN_ERR_CRTL_RX_OVERFLOW;
+			priv->can_err_id |= CAN_ERR_CRTL;
+			priv->can_err_data[1] |= CAN_ERR_CRTL_RX_OVERFLOW;
 		}
 	}
 
-	/* and send error packet */
-	if (canid)
-		mcp2517fd_error_skb(priv->net, canid, data1);
+	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int mode;
+	int ret;
+
+	/* mask interrupt for clearing */
+	priv->int_clear_mask |= CAN_INT_MODIF;
+
+	/* read the mode bit */
+	ret = mcp2517fd_cmd_read_mask(spi,
+				      CAN_CON,
+				      &priv->regs.con,
+				      CAN_CON_OPMOD_MASK,
+				      priv->spi_speed_hz);
+	if (ret)
+		return ret;
+
+	mode = (priv->regs.con & CAN_CON_OPMOD_MASK) >>
+		CAN_CON_OPMOD_SHIFT;
+
+	/* this mostly happens on initialization */
+	if (mode == priv->active_can_mode) {
+		dev_err(&spi->dev,
+			"Controller switched to already active mode: %s(%u)\n",
+			mcp2517fd_mode_names[mode], mode);
+		return 0;
+	}
+
+	/* these we need to handle correctly */
+	dev_err(&spi->dev,
+		"Controller switched from mode %s(%u) to %s(%u)\n",
+		mcp2517fd_mode_names[priv->active_can_mode],
+		priv->active_can_mode,
+		mcp2517fd_mode_names[mode], mode);
+
+	/* finally assign the mode as currently active */
+	priv->active_can_mode = mode;
+	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_cerrif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/*
+	 * in principle we could also delay reading bdiag registers
+	 * until we get here - it would add some extra delay in the
+	 * error case, but be slightly faster in the "normal" case.
+	 * slightly faster would be saving 8 bytes of spi transfer.
+	 */
+
+	dev_err_ratelimited(&spi->dev, "CAN Bus error\n");
+	priv->can_err_id |= CAN_ERR_BUSERROR;
+	priv->int_clear_mask |= CAN_INT_CERRIF;
+
+	if (priv->status.bdiag1 &
+	    (CAN_BDIAG1_DBIT0ERR | CAN_BDIAG1_NBIT0ERR)) {
+		priv->can_err_id |= CAN_ERR_BUSERROR;
+		priv->can_err_data[2] |= CAN_ERR_PROT_BIT0;
+		priv->bdiag1_clear_mask |= CAN_BDIAG1_DBIT0ERR |
+			CAN_BDIAG1_NBIT0ERR;
+	}
+	if (priv->status.bdiag1 &
+	    (CAN_BDIAG1_DBIT1ERR | CAN_BDIAG1_NBIT1ERR)) {
+		priv->can_err_id |= CAN_ERR_BUSERROR;
+		priv->can_err_data[2] |= CAN_ERR_PROT_BIT1;
+		priv->bdiag1_clear_mask |= CAN_BDIAG1_DBIT1ERR |
+			CAN_BDIAG1_NBIT1ERR;
+	}
+	if (priv->status.bdiag1 &
+	    (CAN_BDIAG1_DSTUFERR | CAN_BDIAG1_NSTUFERR)) {
+		priv->can_err_id |= CAN_ERR_BUSERROR;
+		priv->can_err_data[2] |= CAN_ERR_PROT_STUFF;
+		priv->bdiag1_clear_mask |= CAN_BDIAG1_DSTUFERR |
+			CAN_BDIAG1_NSTUFERR;
+	}
+	if (priv->status.bdiag1 &
+	    (CAN_BDIAG1_DFORMERR | CAN_BDIAG1_NFORMERR)) {
+		priv->can_err_id |= CAN_ERR_BUSERROR;
+		priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
+		priv->bdiag1_clear_mask |= CAN_BDIAG1_DFORMERR |
+			CAN_BDIAG1_NFORMERR;
+	}
+	if (priv->status.bdiag1 & CAN_BDIAG1_NACKERR) {
+		priv->can_err_id |= CAN_ERR_ACK;
+		priv->bdiag1_clear_mask |= CAN_BDIAG1_NACKERR;
+	}
 
 	return 0;
 }
@@ -2480,6 +2617,17 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	int ret;
+
+	/* interrupt clearing info */
+	priv->int_clear_value = 0;
+	priv->int_clear_mask = 0;
+	priv->bdiag1_clear_value = 0;
+	priv->bdiag1_clear_mask = 0;
+	priv->can_err_id = 0;
+	memset(priv->can_err_data, 0, 8);
+
+	/* state changes */
+	priv->new_state = priv->can.state;
 
 	/* clear queued fifos */
 	mcp2517fd_clear_queued_fifos(spi);
@@ -2501,15 +2649,111 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* process the queued fifos */
 	ret = mcp2517fd_process_queued_fifos(spi);
 
-	/* handle errors */
+	/* handle error interrupt flags */
 	if (priv->status.rxovif) {
 		ret = mcp2517fd_can_ist_handle_rxovif(spi);
 		if (ret)
 			return ret;
 	}
 
-	/* handle MODIF */
-	//if (priv->status.intf & CAN_INT_MODIF)
+	if (priv->status.intf & CAN_INT_MODIF) {
+		ret = mcp2517fd_can_ist_handle_modif(spi);
+		if (ret)
+			return ret;
+	}
+
+	/* these we will just log for now */
+	if (priv->status.intf & CAN_INT_SERRIF) {
+		dev_err_ratelimited (&spi->dev, "Detected system error\n");
+		priv->int_clear_mask |= CAN_INT_SERRIF;
+	}
+
+	if (priv->status.intf & CAN_INT_IVMIF) {
+		priv->can_err_id |= CAN_ERR_PROT;
+		priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
+		dev_err_ratelimited(&spi->dev, "Received Invalid message\n");
+		priv->int_clear_mask |= CAN_INT_IVMIF;
+	}
+
+	if (priv->status.intf & CAN_INT_ECCIF) {
+		priv->can_err_id |= CAN_ERR_CRTL;
+		priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
+		dev_err_ratelimited(&spi->dev, "ECC errors\n");
+		priv->int_clear_mask |= CAN_INT_ECCIF;
+	}
+
+	/* handle bus errors in more detail */
+	if (priv->status.intf & CAN_INT_CERRIF) {
+		ret = mcp2517fd_can_ist_handle_cerrif(spi);
+		if (ret)
+			return ret;
+	}
+
+	/* Error counter handling */
+	if (priv->status.trec & CAN_TREC_TXWARN) {
+		priv->new_state = CAN_STATE_ERROR_WARNING;
+		priv->can_err_id |= CAN_ERR_CRTL;
+		priv->can_err_data[1] |= CAN_ERR_CRTL_TX_WARNING;
+	}
+	if (priv->status.trec & CAN_TREC_RXWARN) {
+		priv->new_state = CAN_STATE_ERROR_WARNING;
+		priv->can_err_id |= CAN_ERR_CRTL;
+		priv->can_err_data[1] |= CAN_ERR_CRTL_RX_WARNING;
+	}
+	if (priv->status.trec & CAN_TREC_TXBP) {
+		priv->new_state = CAN_STATE_ERROR_PASSIVE;
+		priv->can_err_id |= CAN_ERR_CRTL;
+		priv->can_err_data[1] |= CAN_ERR_CRTL_TX_PASSIVE;
+	}
+	if (priv->status.trec & CAN_TREC_RXBP) {
+		priv->new_state = CAN_STATE_ERROR_PASSIVE;
+		priv->can_err_id |= CAN_ERR_CRTL;
+		priv->can_err_data[1] |= CAN_ERR_CRTL_RX_PASSIVE;
+	}
+	if (priv->status.trec & CAN_TREC_TXBO) {
+		priv->new_state = CAN_STATE_BUS_OFF;
+		priv->can_err_id |= CAN_ERR_BUSOFF;
+	}
+
+	/* based on the last state state check the new state */
+	switch (priv->can.state) {
+	case CAN_STATE_ERROR_ACTIVE:
+		if (priv->new_state >= CAN_STATE_ERROR_WARNING &&
+		    priv->new_state <= CAN_STATE_BUS_OFF)
+			priv->can.can_stats.error_warning++;
+	case CAN_STATE_ERROR_WARNING:	/* fallthrough */
+		if (priv->new_state >= CAN_STATE_ERROR_PASSIVE &&
+		    priv->new_state <= CAN_STATE_BUS_OFF)
+			priv->can.can_stats.error_passive++;
+		break;
+	default:
+		break;
+	}
+	priv->can.state = priv->new_state;
+
+	/* and send error packet */
+	if (priv->can_err_id)
+		mcp2517fd_error_skb(priv->net);
+
+	/* clear int flags */
+	if (priv->int_clear_mask) {
+		ret = mcp2517fd_cmd_write_mask(spi,
+					       CAN_INT,
+					       priv->int_clear_value,
+					       priv->int_clear_mask,
+					       priv->spi_speed_hz);
+		if (ret)
+			return ret;
+	}
+	if (priv->bdiag1_clear_mask) {
+		ret = mcp2517fd_cmd_write_mask(spi,
+					       CAN_BDIAG1,
+					       priv->bdiag1_clear_value,
+					       priv->bdiag1_clear_mask,
+					       priv->spi_speed_hz);
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
@@ -2694,7 +2938,7 @@ MODULE_DEVICE_TABLE(spi, mcp2517fd_id_table);
 static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 {
 #if defined(CONFIG_DEBUG_FS)
-	struct dentry *root, *fifousage, *fifoaddr, *rx, *tx, *status;
+	struct dentry *root, *fifousage, *fifoaddr, *rx, *tx, *status, *regs;
 	char name[32];
 	int i;
 
@@ -2708,6 +2952,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	fifousage = debugfs_create_dir("fifo_usage", root);
 	fifoaddr = debugfs_create_dir("fifo_address", root);
 	status = debugfs_create_dir("status", root);
+	regs = debugfs_create_dir("regs", root);
 
 	/* add irq state info */
 	debugfs_create_u64("irq_loops", 0444, root, &priv->irq_loops);
@@ -2723,6 +2968,14 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_x32("trec", 0444, status, &priv->status.trec);
 	debugfs_create_x32("bdiag0", 0444, status, &priv->status.bdiag0);
 	debugfs_create_x32("bdiag1", 0444, status, &priv->status.bdiag1);
+
+	/* some configuration registers */
+	debugfs_create_x32("con", 0444, regs, &priv->regs.con);
+	debugfs_create_x32("ecccon", 0444, regs, &priv->regs.ecccon);
+	debugfs_create_x32("osc", 0444, regs, &priv->regs.osc);
+	debugfs_create_x32("iocon", 0444, regs, &priv->regs.iocon);
+	debugfs_create_x32("tdc", 0444, regs, &priv->regs.tdc);
+	debugfs_create_x32("tscon", 0444, regs, &priv->regs.tscon);
 
 	/* information on fifos */
 	debugfs_create_u8("fifo_start", 0444, rx, &priv->rx_fifo_start);
