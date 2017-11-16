@@ -700,6 +700,9 @@ struct mcp2517fd_priv {
 	struct can_priv	   can;
 	struct net_device *net;
 	struct spi_device *spi;
+	struct regulator *power;
+	struct regulator *transceiver;
+	struct clk *clk;
 
 	struct dentry *debugfs_dir;
 
@@ -712,9 +715,6 @@ struct mcp2517fd_priv {
 #define IRQ_STATE_NEVER_RUN 0
 #define IRQ_STATE_RUNNING 1
 #define IRQ_STATE_HANDLED 2
-
-	/* status of the tx_queue enabled/disabled */
-	u32 tx_queue_status;
 
 	/* clock configuration */
 	struct {
@@ -803,9 +803,6 @@ struct mcp2517fd_priv {
 #define AFTER_SUSPEND_POWER 4
 #define AFTER_SUSPEND_RESTART 8
 	int restart_tx;
-	struct regulator *power;
-	struct regulator *transceiver;
-	struct clk *clk;
 
 	/* interrupt flags during irq handling */
 	u32 int_clear_mask;
@@ -820,6 +817,9 @@ struct mcp2517fd_priv {
 	/* the current mode */
 	u32 active_can_mode;
 	u32 new_state;
+
+	/* status of the tx_queue enabled/disabled */
+	u32 tx_queue_status;
 
 	/* statistics of FIFO usage */
 	u64 fifo_usage[32];
