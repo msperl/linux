@@ -1269,7 +1269,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 		netif_stop_queue(priv->net);
 	}
 
-	/* mark as pending */
+	/* mark as submitted */
 	priv->tx_submitted_mask |= BIT(fifo);
 	priv->fifo_usage[fifo]++;
 
@@ -1786,14 +1786,19 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	/* calculate the number of fifos that have been processed */
 	count = hweight_long(pending);
 	count -= hweight_long(priv->status.txreq);
+	if (count <= 0) {
+		dev_err(&spi->dev,
+			"Strange situation within handle_tefif - count = %i\n",
+			count);
+		dev_err(&spi->dev,
+			"\tpending   : %08x",priv->tx_pending_mask);
+		dev_err(&spi->dev,
+			"\tprocessed : %08x",priv->tx_processed_mask);
+	}
 
 	/* now clear TEF for each */
-	/* TODO: optimize for BULK reads, as we know COUNT */
-	for(i = priv->tx_fifo_start;
-	    i < priv->tx_fifo_start + priv->tx_fifos;
-	    i++) {
-		if (!(pending & BIT(i)))
-			continue;
+	/* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
+	for (i = 0; i < count; i++) {
 		/* calc address in address space */
 		tef = (struct mcp2517fd_obj_tef *)(priv->fifo_data +
 						   priv->tef_address);
