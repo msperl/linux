@@ -2,6 +2,7 @@
  * CAN bus driver for Microchip 2517FD CAN Controller with SPI Interface
  *
  * Copyright 2017 Martin Sperl <kernel@martin.sperl.org>
+ *
  * SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
  *
  * Based on Microchip MCP251x CAN controller driver written by
@@ -1490,17 +1491,6 @@ static void mcp2517fd_addto_queued_fifos(struct spi_device *spi,
 		rfi->tsmax = obj->ts;
 }
 
-static int mcp2517fd_compare_obj_ts(const void *a, const void *b)
-{
-	const struct mcp2517fd_obj_ts *rxa = a;
-	const struct mcp2517fd_obj_ts *rxb = b;
-	if (rxa->ts < rxb->ts)
-		return -1;
-	if (rxa->ts > rxb->ts)
-		return 1;
-	return 0;
-}
-
 static int mcp2517fd_process_queued_tef(struct spi_device *spi,
 					struct mcp2517fd_obj_ts *obj)
 {
@@ -1538,6 +1528,21 @@ static int mcp2517fd_process_queued_rx(struct spi_device *spi,
 			spi, rx);
 }
 
+static int mcp2517fd_compare_obj_ts(const void *a, const void *b)
+{
+	const struct mcp2517fd_obj_ts * const *rxa = a;
+	const struct mcp2517fd_obj_ts * const *rxb = b;
+	/* using signed here to handle rollover correctly */
+	s32 ats = (*rxa)->ts;
+	s32 bts = (*rxb)->ts;
+
+	if (ats < bts)
+		return -1;
+	if (ats > bts)
+		return 1;
+	return 0;
+}
+
 static int mcp2517fd_process_queued_fifos(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -1545,15 +1550,8 @@ static int mcp2517fd_process_queued_fifos(struct spi_device *spi)
 	int i;
 	int ret;
 
-	/* possibly realign timestamp so that they compare with overflow */
-	if (rfi->tsmin + BIT(30) < rfi->tsmax) {
-		for (i = 0; i < rfi->rx_count ; i++) {
-			rfi->rxb[i]->ts += BIT(30);
-		}
-	}
-
-	/* sort the fifos by timestamp */
-	sort(rfi->rxb, rfi->rx_count, sizeof(*rfi->rxb),
+	/* sort the fifos (rx and TEF) by receive timestamp */
+	sort(rfi->rxb, rfi->rx_count, sizeof(struct mcp2517fd_obj_ts *),
 	     mcp2517fd_compare_obj_ts, NULL);
 
 	/* process the recived fifos */
@@ -1780,10 +1778,8 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	struct net_device *net = priv->net;
 	struct mcp2517fd_obj_tef *tef;
 	u32 pending = priv->tx_pending_mask & (~priv->tx_processed_mask);
-	int do_start = 0;
 	int i, count, fifo;
 	int ret;
 
@@ -1833,18 +1829,7 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 		priv->tx_processed_mask |= BIT(fifo);
 
 		if (fifo == priv->tx_fifo_start)
-			do_start = 1;
-	}
-
-	/* restart the queue */
-	if (do_start) {
-		/* nothing should be left pending /in flight now... */
-		priv->tx_pending_mask = 0;
-		priv->tx_submitted_mask = 0;
-		priv->tx_processed_mask = 0;
-		priv->tx_queue_status = 1;
-		/* wake queue now */
-		netif_wake_queue(net);
+			priv->tx_queue_status = 2;
 	}
 
 	return 0;
@@ -2022,6 +2007,17 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* process the queued fifos */
 	ret = mcp2517fd_process_queued_fifos(spi);
+
+	/* restart the tx queue if needed */
+	if (priv->tx_queue_status == 2) {
+		/* nothing should be left pending /in flight now... */
+		priv->tx_pending_mask = 0;
+		priv->tx_submitted_mask = 0;
+		priv->tx_processed_mask = 0;
+		priv->tx_queue_status = 1;
+		/* wake queue now */
+		netif_wake_queue(priv->net);
+	}
 
 	/* handle error interrupt flags */
 	if (priv->status.rxovif) {
