@@ -2027,11 +2027,15 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	priv->int_clear_mask |= CAN_INT_SERRIF;
 
 	/* a mode change or ecc error would indicate TX MAB Undeflow */
-	if (priv->status.intf & (CAN_INT_MODIF | CAN_INT_ECCIF))
+	if (priv->status.intf & (CAN_INT_MODIF | CAN_INT_ECCIF)) {
 		dev_err_ratelimited(&spi->dev, "TX MAB underflow\n");
-	else
+		priv->net->stats.tx_fifo_errors++;
+		priv->net->stats.tx_errors++;
+	} else {
 		dev_err_ratelimited(&spi->dev, "RX MAB overflow\n");
-
+		priv->net->stats.rx_dropped++;
+		priv->net->stats.rx_errors++;
+	}
 	return 0;
 }
 
@@ -2115,6 +2119,8 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 		priv->can_err_id |= CAN_ERR_PROT;
 		priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
 		priv->int_clear_mask |= CAN_INT_IVMIF;
+		priv->net->stats.rx_frame_errors++;
+		priv->net->stats.rx_errors++;
 	}
 
 	/* handle bus errors in more detail */
@@ -2937,7 +2943,7 @@ static void mcp2517fd_clean(struct net_device *net)
 	for (i = 0; i < priv->tx_fifos; i++) {
 		if (priv->tx_pending_mask & BIT(i)) {
 			can_free_echo_skb(priv->net, 0);
-			net->stats.tx_errors++;
+			priv->net->stats.tx_errors++;
 		}
 	}
 
