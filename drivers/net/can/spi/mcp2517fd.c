@@ -2008,6 +2008,33 @@ static int mcp2517fd_can_ist_handle_eccif(struct spi_device *spi)
 				 priv->spi_speed_hz);
 }
 
+static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/* Errors here are:
+	 * * Bus Bandwidth Error: when a RX Message Assembly Buffer
+	 *   is still full when the next message has already arrived
+	 *   the recived message shall be ignored
+	 * * TX MAB Underflow: when a TX Message is invalid
+	 *   due to ECC errors or TXMAB underflow
+	 *   in this mode the sytem will transition to restricted
+	 *   or Listen Only mode
+	 */
+
+	priv->can_err_id |= CAN_ERR_CRTL;
+	priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
+	priv->int_clear_mask |= CAN_INT_SERRIF;
+
+	/* a mode change or ecc error would indicate TX MAB Undeflow */
+	if (priv->status.intf & (CAN_INT_MODIF | CAN_INT_ECCIF))
+		dev_err_ratelimited(&spi->dev, "TX MAB underflow\n");
+	else
+		dev_err_ratelimited(&spi->dev, "RX MAB overflow\n");
+
+	return 0;
+}
+
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -2062,29 +2089,11 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 			return ret;
 	}
 
+	/* mode change erros */
 	if (priv->status.intf & CAN_INT_MODIF) {
 		ret = mcp2517fd_can_ist_handle_modif(spi);
 		if (ret)
 			return ret;
-	}
-
-	if (priv->status.intf & CAN_INT_SERRIF) {
-		dev_err_ratelimited(&spi->dev, "Detected system error\n");
-		priv->can_err_id |= CAN_ERR_CRTL;
-		priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
-		/* maybe we should do some more here
-		 * - need to know the exact circumstances
-		 * under which this happens and what registers look like
-		 */
-		return -EINVAL;
-		priv->int_clear_mask |= CAN_INT_SERRIF;
-	}
-
-	/* message format interrupt */
-	if (priv->status.intf & CAN_INT_IVMIF) {
-		priv->can_err_id |= CAN_ERR_PROT;
-		priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
-		priv->int_clear_mask |= CAN_INT_IVMIF;
 	}
 
 	/* sram ECC error interrupt */
@@ -2092,6 +2101,20 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 		ret = mcp2517fd_can_ist_handle_eccif(spi);
 		if (ret)
 			return ret;
+	}
+
+	/* system error interrupt*/
+	if (priv->status.intf & CAN_INT_SERRIF) {
+		ret = mcp2517fd_can_ist_handle_serrif(spi);
+		if (ret)
+			return ret;
+	}
+
+	/* message format interrupt */
+	if (priv->status.intf & CAN_INT_IVMIF) {
+		priv->can_err_id |= CAN_ERR_PROT;
+		priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
+		priv->int_clear_mask |= CAN_INT_IVMIF;
 	}
 
 	/* handle bus errors in more detail */
