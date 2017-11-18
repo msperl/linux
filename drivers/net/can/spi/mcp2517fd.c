@@ -716,8 +716,8 @@ struct mcp2517fd_priv {
 #define IRQ_STATE_RUNNING 1
 #define IRQ_STATE_HANDLED 2
 
-	/* clock configuration */
 	struct {
+		/* clock configuration */
 		bool clock_pll;
 		bool clock_div2;
 		int  clock_odiv;
@@ -734,31 +734,41 @@ struct mcp2517fd_priv {
 	u32 spi_setup_speed_hz;
 	u32 spi_speed_hz;
 
-	/* define payload size and mode */
-	int payload_size;
-	u8 payload_mode;
+	/* fifo info */
+	struct {
+		/* define payload size and mode */
+		int payload_size;
+		u32 payload_mode;
 
-	/* TEF addresses - start, end and current */
-	u32 tef_address_start;
-	u32 tef_address_end;
-	u32 tef_address;
+		/* TEF addresses - start, end and current */
+		u32 tef_address_start;
+		u32 tef_address_end;
+		u32 tef_address;
 
-	/* address in mcp2517fd-Fifo RAM of each fifo */
-	u32 fifo_address[32];
+		/* address in mcp2517fd-Fifo RAM of each fifo */
+		u32 fifo_address[32];
 
-	/* infos on tx-fifos */
-	u8 tx_fifos;
-	u8 tx_fifo_start;
-	u32 tx_fifo_mask; /* bitmask of which fifo is a tx fifo */
-	u32 tx_submitted_mask;
-	u32 tx_pending_mask;
-	u32 tx_processed_mask;
+		/* infos on tx-fifos */
+		u32 tx_fifos;
+		u32 tx_fifo_start;
+		u32 tx_fifo_mask; /* bitmask of which fifo is a tx fifo */
+		u32 tx_submitted_mask;
+		u32 tx_pending_mask;
+		u32 tx_processed_mask;
 
-	/* info on rx_fifos */
-	u8 rx_fifos;
-	u8 rx_fifo_depth;
-	u8 rx_fifo_start;
-	u32 rx_fifo_mask;  /* bitmask of which fifo is a rx fifo */
+		/* info on rx_fifos */
+		u32 rx_fifos;
+		u32 rx_fifo_depth;
+		u32 rx_fifo_start;
+		u32 rx_fifo_mask;  /* bitmask of which fifo is a rx fifo */
+
+		/* memory image of FIFO RAM on mcp2517fd */
+		u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
+
+	} fifos;
+
+	/* structure with active fifos that need to get fed to the system */
+	struct mcp2517fd_read_fifo_info queued_fifos;
 
 	/* statistics */
 	struct {
@@ -826,18 +836,15 @@ struct mcp2517fd_priv {
 	/* status of the tx_queue enabled/disabled */
 	u32 tx_queue_status;
 
-	/* memory image of FIFO RAM on mcp2517fd */
-	u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
-
-	/* spi-tx/rx buffers for efficient transfers */
+	/*
+	 * spi-tx/rx buffers for efficient transfers
+	 * used during setup and irq
+	 */
 	u8 spi_tx[MCP2517FD_BUFFER_TXRX_SIZE];
 	u8 spi_rx[MCP2517FD_BUFFER_TXRX_SIZE];
 
 	/* structure for transmit fifo spi_messages */
 	struct mcp2517fd_trigger_tx_message *spi_transmit_fifos;
-
-	/* structure with active fifos that need to get fed to the system */
-	struct mcp2517fd_read_fifo_info queued_fifos;
 };
 
 /* module parameters */
@@ -1132,7 +1139,7 @@ static void mcp2517fd_mark_tx_pending(void *context)
 	 * so there is no race condition and it does not require locking
 	 * serialization happens via spi_pump_message
 	 */
-	priv->tx_pending_mask |= BIT(txm->fifo);
+	priv->fifos.tx_pending_mask |= BIT(txm->fifo);
 }
 
 static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
@@ -1143,13 +1150,13 @@ static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 	const int first_byte = (ffs(trigger) - 1)  >> 3;
 
 	priv->spi_transmit_fifos = kzalloc(
-		sizeof(*priv->spi_transmit_fifos) * priv->tx_fifos,
+		sizeof(*priv->spi_transmit_fifos) * priv->fifos.tx_fifos,
 		GFP_KERNEL | GFP_DMA);
 	if (!priv->spi_transmit_fifos)
 		return -ENOMEM;
 
-	for (i = 0; i < priv->tx_fifos; i++) {
-		fifo = priv->tx_fifo_start + i;
+	for (i = 0; i < priv->fifos.tx_fifos; i++) {
+		fifo = priv->fifos.tx_fifo_start + i;
 		txm = &priv->spi_transmit_fifos[i];
 		/* prepare the message */
 		spi_message_init(&txm->msg);
@@ -1162,7 +1169,7 @@ static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 		txm->fill_xfer.len = 2;
 		txm->fill_xfer.cs_change = true;
 		mcp2517fd_calc_cmd_addr(INSTRUCTION_WRITE,
-					FIFO_DATA(priv->fifo_address[fifo]),
+					FIFO_DATA(priv->fifos.fifo_address[fifo]),
 					txm->fill_cmd);
 		spi_message_add_tail(&txm->fill_xfer, &txm->msg);
 		/* the trigger command */
@@ -1185,7 +1192,7 @@ static int mcp2517fd_transmit_message_common(
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct mcp2517fd_trigger_tx_message *txm =
-		&priv->spi_transmit_fifos[fifo - priv->tx_fifo_start];
+		&priv->spi_transmit_fifos[fifo - priv->fifos.tx_fifo_start];
 	int ret;
 
 	/* add fifo as seq */
@@ -1268,16 +1275,16 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 
 	/* get effective mask */
-	pending_mask = priv->tx_pending_mask | priv->tx_submitted_mask;
+	pending_mask = priv->fifos.tx_pending_mask | priv->fifos.tx_submitted_mask;
 
 	/* decide on fifo to assign */
 	if (pending_mask)
 		fifo = ffs(pending_mask) - 2;
 	else
-		fifo = priv->tx_fifo_start + priv->tx_fifos - 1;
+		fifo = priv->fifos.tx_fifo_start + priv->fifos.tx_fifos - 1;
 
 	/* handle error - this should not happen... */
-	if (fifo < priv->tx_fifo_start) {
+	if (fifo < priv->fifos.tx_fifo_start) {
 		dev_err(&spi->dev,
 			"reached tx-fifo %i, which is not valid\n",
 			fifo);
@@ -1285,13 +1292,13 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 	}
 
 	/* if we are the last one, then stop the queue */
-	if (fifo == priv->tx_fifo_start) {
+	if (fifo == priv->fifos.tx_fifo_start) {
 		priv->tx_queue_status = 0;
 		netif_stop_queue(priv->net);
 	}
 
 	/* mark as submitted */
-	priv->tx_submitted_mask |= BIT(fifo);
+	priv->fifos.tx_submitted_mask |= BIT(fifo);
 	priv->stats.fifo_usage[fifo]++;
 
 	/* now process it for real */
@@ -1461,8 +1468,8 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 	/* the worsted case buffer */
 	u32 buf[32 * FIFOCON_SPACINGW], base;
 
-	base = (priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
-		((priv->rx_fifo_depth - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
+	base = (priv->fifos.payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
+		((priv->fifos.rx_fifo_depth - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
 		CAN_FIFOCON_RXTSEN | /* RX timestamps */
 		CAN_FIFOCON_UINC |
 		CAN_FIFOCON_TFERFFIE | /* FIFO Full */
@@ -1471,7 +1478,7 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 
 	memset(buf, 0, sizeof(buf));
 	for (i = 0; i < end - start ; i++) {
-		if (i == priv->rx_fifos - 1)
+		if (i == priv->fifos.rx_fifos - 1)
 			base |= CAN_FIFOCON_RXOVIE;
 		buf[FIFOCON_SPACINGW * i] = cpu_to_le32(base);
 	}
@@ -1660,17 +1667,17 @@ static int mcp2517fd_read_fifos(struct spi_device *spi)
 	int ret;
 
 	/* read all the "open" segments in big chunks */
-	for (i = priv->rx_fifo_start;
-	     i < priv->rx_fifo_start + priv->rx_fifos;
+	for (i = priv->fifos.rx_fifo_start;
+	     i < priv->fifos.rx_fifo_start + priv->fifos.rx_fifos;
 	     i++) {
 		if (!(mask & BIT(i)))
 			continue;
 		/* the fifo to fill */
 		rx = (struct mcp2517fd_obj_rx *)
-			(priv->fifo_data + priv->fifo_address[i]);
+			(priv->fifos.fifo_data + priv->fifos.fifo_address[i]);
 		/* read the minimal payload */
 		ret = mcp2517fd_cmd_readn(
-			spi, FIFO_DATA(priv->fifo_address[i]),
+			spi, FIFO_DATA(priv->fifos.fifo_address[i]),
 			rx,
 			fifo_min_size,
 			priv->spi_speed_hz);
@@ -1684,7 +1691,7 @@ static int mcp2517fd_read_fifos(struct spi_device *spi)
 		if (len > fifo_min_payload_size) {
 			ret = mcp2517fd_cmd_readn(
 				spi,
-				FIFO_DATA(priv->fifo_address[i] +
+				FIFO_DATA(priv->fifos.fifo_address[i] +
 					  fifo_min_size),
 				&rx->data[fifo_min_payload_size],
 				len - fifo_min_payload_size,
@@ -1716,13 +1723,13 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 	int ret;
 
 	/* read all the "open" segments in big chunks */
-	for (i = priv->rx_fifo_start;
-	     i < priv->rx_fifo_start + priv->rx_fifos;
+	for (i = priv->fifos.rx_fifo_start;
+	     i < priv->fifos.rx_fifo_start + priv->fifos.rx_fifos;
 	     i++) {
 		if (mask & BIT(i)) {
 			/* find the last set bit in sequence */
 			for (j = i;
-			    (j < priv->rx_fifo_start + priv->rx_fifos) &&
+			    (j < priv->fifos.rx_fifo_start + priv->fifos.rx_fifos) &&
 				    (mask & BIT(j));
 			    j++) {
 				/* clear the mask */
@@ -1731,8 +1738,8 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 
 			/* now we got start and end, so read the range */
 			ret = mcp2517fd_cmd_readn(
-				spi, FIFO_DATA(priv->fifo_address[i]),
-				priv->fifo_data + priv->fifo_address[i],
+				spi, FIFO_DATA(priv->fifos.fifo_address[i]),
+				priv->fifos.fifo_data + priv->fifos.fifo_address[i],
 				(j - i) * fifo_max_size,
 				priv->spi_speed_hz);
 			if (ret)
@@ -1752,8 +1759,8 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 			for (; i < j ; i++) {
 				/* store the fifo to process */
 				rx = (struct mcp2517fd_obj_rx *)
-					priv->fifo_data +
-					priv->fifo_address[i];
+					priv->fifos.fifo_data +
+					priv->fifos.fifo_address[i];
 				/* process fifo stats */
 				mcp2517fd_transform_rx(spi, rx);
 				/* increment usage */
@@ -1788,7 +1795,7 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct mcp2517fd_obj_tef *tef;
-	u32 pending = priv->tx_pending_mask & (~priv->tx_processed_mask);
+	u32 pending = priv->fifos.tx_pending_mask & (~priv->fifos.tx_processed_mask);
 	int i, count, fifo;
 	int ret;
 
@@ -1806,11 +1813,11 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	/* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
 	for (i = 0; i < count; i++) {
 		/* calc address in address space */
-		tef = (struct mcp2517fd_obj_tef *)(priv->fifo_data +
-						   priv->tef_address);
+		tef = (struct mcp2517fd_obj_tef *)(priv->fifos.fifo_data +
+						   priv->fifos.tef_address);
 		/* read all the object data */
 		ret = mcp2517fd_cmd_readn(spi,
-					  FIFO_DATA(priv->tef_address),
+					  FIFO_DATA(priv->fifos.tef_address),
 					  tef, sizeof(*tef),
 					  priv->spi_speed_hz);
 
@@ -1832,14 +1839,14 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 		mcp2517fd_addto_queued_fifos(spi, &tef->header);
 
 		/* increment tef */
-		priv->tef_address += sizeof(*tef);
-		if (priv->tef_address > priv->tef_address_end)
-			priv->tef_address = priv->tef_address_start;
+		priv->fifos.tef_address += sizeof(*tef);
+		if (priv->fifos.tef_address > priv->fifos.tef_address_end)
+			priv->fifos.tef_address = priv->fifos.tef_address_start;
 
 		/* and set mask */
-		priv->tx_processed_mask |= BIT(fifo);
+		priv->fifos.tx_processed_mask |= BIT(fifo);
 
-		if (fifo == priv->tx_fifo_start)
+		if (fifo == priv->fifos.tx_fifo_start)
 			priv->tx_queue_status = 2;
 	}
 
@@ -2082,9 +2089,9 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* restart the tx queue if needed */
 	if (priv->tx_queue_status == 2) {
 		/* nothing should be left pending /in flight now... */
-		priv->tx_pending_mask = 0;
-		priv->tx_submitted_mask = 0;
-		priv->tx_processed_mask = 0;
+		priv->fifos.tx_pending_mask = 0;
+		priv->fifos.tx_submitted_mask = 0;
+		priv->fifos.tx_processed_mask = 0;
 		priv->tx_queue_status = 1;
 		/* wake queue now */
 		netif_wake_queue(priv->net);
@@ -2604,17 +2611,17 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		 */
 
 		/* mtu is 8 */
-		priv->payload_size = 8;
-		priv->payload_mode = CAN_TXQCON_PLSIZE_8;
+		priv->fifos.payload_size = 8;
+		priv->fifos.payload_mode = CAN_TXQCON_PLSIZE_8;
 
 		/* 7 tx fifos starting at fifo 1 */
-		priv->tx_fifo_start = 1;
-		priv->tx_fifos = 7;
+		priv->fifos.tx_fifo_start = 1;
+		priv->fifos.tx_fifos = 7;
 
 		/* 24 rx fifos starting at fifo 8 with 2 buffers/fifo */
-		priv->rx_fifo_start = 8;
-		priv->rx_fifos = 24;
-		priv->rx_fifo_depth = 1;
+		priv->fifos.rx_fifo_start = 8;
+		priv->fifos.rx_fifos = 24;
+		priv->fifos.rx_fifo_depth = 1;
 
 		break;
 	case CANFD_MTU:
@@ -2622,17 +2629,17 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		 * that can separate based on length ...
 		 */
 		/* MTU is 64 */
-		priv->payload_size = 64;
-		priv->payload_mode = CAN_TXQCON_PLSIZE_64;
+		priv->fifos.payload_size = 64;
+		priv->fifos.payload_mode = CAN_TXQCON_PLSIZE_64;
 
 		/* 7 tx fifos starting at fifo 1 */
-		priv->tx_fifo_start = 1;
-		priv->tx_fifos = 7;
+		priv->fifos.tx_fifo_start = 1;
+		priv->fifos.tx_fifos = 7;
 
 		/* 19 rx fifos starting at fifo 8 with 1 buffer/fifo */
-		priv->rx_fifo_start = 8;
-		priv->rx_fifos = 19;
-		priv->rx_fifo_depth = 1;
+		priv->fifos.rx_fifo_start = 8;
+		priv->fifos.rx_fifos = 19;
+		priv->fifos.rx_fifo_depth = 1;
 
 		break;
 	default:
@@ -2643,7 +2650,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	priv->regs.tefcon = CAN_TEFCON_FRESET |
 		CAN_TEFCON_TEFNEIE |
 		CAN_TEFCON_TEFTSEN |
-		((priv->tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT),
+		((priv->fifos.tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT),
 
 	ret = mcp2517fd_cmd_write(
 		spi, CAN_TEFCON,
@@ -2655,7 +2662,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	/* set up tx fifos */
 	val = CAN_FIFOCON_TXEN |
 		CAN_FIFOCON_FRESET | /* reset FIFO */
-		(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
+		(priv->fifos.payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
 		(0 << CAN_FIFOCON_FSIZE_SHIFT); /* 1 FIFO only */
 
 	if (priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
@@ -2665,32 +2672,32 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		val |= CAN_FIFOCON_TXAT_UNLIMITED <<
 			CAN_FIFOCON_TXAT_SHIFT;
 
-	for (i = 0; i < priv->tx_fifos; i++) {
-		fifo = priv->tx_fifo_start + i;
+	for (i = 0; i < priv->fifos.tx_fifos; i++) {
+		fifo = priv->fifos.tx_fifo_start + i;
 		ret = mcp2517fd_cmd_write(
 			spi, CAN_FIFOCON(fifo),
 			val | (fifo << CAN_FIFOCON_TXPRI_SHIFT),
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-		priv->tx_fifo_mask |= BIT(fifo);
+		priv->fifos.tx_fifo_mask |= BIT(fifo);
 	}
 
 	/* now set up RX FIFO */
-	for (i = 0; i < priv->rx_fifos; i++) {
-		fifo = priv->rx_fifo_start + i;
+	for (i = 0; i < priv->fifos.rx_fifos; i++) {
+		fifo = priv->fifos.rx_fifo_start + i;
 		/* prepare the fifo itself */
 		ret = mcp2517fd_cmd_write(
 			spi, CAN_FIFOCON(fifo),
-			(priv->payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
-			((priv->rx_fifo_depth - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
+			(priv->fifos.payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
+			((priv->fifos.rx_fifo_depth - 1) << CAN_FIFOCON_FSIZE_SHIFT) |
 			CAN_FIFOCON_RXTSEN | /* RX timestamps */
 			CAN_FIFOCON_FRESET | /* reset FIFO */
 			CAN_FIFOCON_TFERFFIE | /* FIFO Full */
 			CAN_FIFOCON_TFHRFHIE | /* FIFO Half Full*/
 			CAN_FIFOCON_TFNRFNIE | /* FIFO not empty */
 			/* on the last fifo add overflow flag */
-			((i == priv->rx_fifos - 1) ? CAN_FIFOCON_RXOVIE : 0),
+			((i == priv->fifos.rx_fifos - 1) ? CAN_FIFOCON_RXOVIE : 0),
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
@@ -2705,7 +2712,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		if (ret)
 			return ret;
 
-		priv->rx_fifo_mask |= BIT(fifo);
+		priv->fifos.rx_fifo_mask |= BIT(fifo);
 	}
 
 	/* we need to move out of CONFIG mode shortly to get the addresses */
@@ -2721,20 +2728,20 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-	priv->tef_address = val;
-	priv->tef_address_start = val;
-	priv->tef_address_end = priv->tef_address_start +
-		(priv->tx_fifos) * sizeof(struct mcp2517fd_obj_tef) -
+	priv->fifos.tef_address = val;
+	priv->fifos.tef_address_start = val;
+	priv->fifos.tef_address_end = priv->fifos.tef_address_start +
+		(priv->fifos.tx_fifos) * sizeof(struct mcp2517fd_obj_tef) -
 		1;
 
 	/* get all the relevant addresses for the transmit fifos */
-	for (i = 0; i < priv->tx_fifos; i++) {
-		fifo = priv->tx_fifo_start + i;
+	for (i = 0; i < priv->fifos.tx_fifos; i++) {
+		fifo = priv->fifos.tx_fifo_start + i;
 		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(fifo),
 					 &val, priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-		priv->fifo_address[fifo] = val;
+		priv->fifos.fifo_address[fifo] = val;
 	}
 
 	/* and prepare the spi_messages */
@@ -2743,13 +2750,13 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		return ret;
 
 	/* get all the relevant addresses for the rx fifos */
-	for (i = 0; i < priv->rx_fifos; i++) {
-		fifo = priv->rx_fifo_start + i;
+	for (i = 0; i < priv->fifos.rx_fifos; i++) {
+		fifo = priv->fifos.rx_fifo_start + i;
 		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(fifo),
 					 &val, priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
-	       priv->fifo_address[fifo] = val;
+	       priv->fifos.fifo_address[fifo] = val;
 	}
 
 	/* now get back into config mode */
@@ -2941,14 +2948,14 @@ static void mcp2517fd_clean(struct net_device *net)
 	struct mcp2517fd_priv *priv = netdev_priv(net);
 	int i;
 
-	for (i = 0; i < priv->tx_fifos; i++) {
-		if (priv->tx_pending_mask & BIT(i)) {
+	for (i = 0; i < priv->fifos.tx_fifos; i++) {
+		if (priv->fifos.tx_pending_mask & BIT(i)) {
 			can_free_echo_skb(priv->net, 0);
 			priv->net->stats.tx_errors++;
 		}
 	}
 
-	priv->tx_pending_mask = 0;
+	priv->fifos.tx_pending_mask = 0;
 }
 
 static int mcp2517fd_stop(struct net_device *net)
@@ -3048,25 +3055,32 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_x32("tscon", 0444, regs, &priv->regs.tscon);
 
 	/* information on fifos */
-	debugfs_create_u8("fifo_start", 0444, rx, &priv->rx_fifo_start);
-	debugfs_create_u8("fifo_count", 0444, rx, &priv->rx_fifos);
-	debugfs_create_x32("fifo_mask", 0444, rx, &priv->rx_fifo_mask);
-	debugfs_create_u64("rx_overflow", 0444, rx, &priv->stats.rx_overflow);
+	debugfs_create_u32("fifo_start", 0444, rx,
+			  &priv->fifos.rx_fifo_start);
+	debugfs_create_u32("fifo_count", 0444, rx,
+			  &priv->fifos.rx_fifos);
+	debugfs_create_x32("fifo_mask", 0444, rx,
+			   &priv->fifos.rx_fifo_mask);
+	debugfs_create_u64("rx_overflow", 0444, rx,
+			   &priv->stats.rx_overflow);
 
-	debugfs_create_u8("fifo_start", 0444, tx, &priv->tx_fifo_start);
-	debugfs_create_u8("fifo_count", 0444, tx, &priv->tx_fifos);
-	debugfs_create_x32("fifo_mask", 0444, tx, &priv->tx_fifo_mask);
+	debugfs_create_u32("fifo_start", 0444, tx,
+			  &priv->fifos.tx_fifo_start);
+	debugfs_create_u32("fifo_count", 0444, tx,
+			  &priv->fifos.tx_fifos);
+	debugfs_create_x32("fifo_mask", 0444, tx,
+			   &priv->fifos.tx_fifo_mask);
 	debugfs_create_x32("fifo_pending", 0444, tx,
-			   &priv->tx_pending_mask);
+			   &priv->fifos.tx_pending_mask);
 	debugfs_create_x32("fifo_submitted", 0444, tx,
-			   &priv->tx_submitted_mask);
+			   &priv->fifos.tx_submitted_mask);
 	debugfs_create_x32("fifo_processed", 0444, tx,
-			   &priv->tx_processed_mask);
+			   &priv->fifos.tx_processed_mask);
 	debugfs_create_u32("queue_status", 0444, tx,
 			   &priv->tx_queue_status);
 
 	debugfs_create_u32("fifo_max_payload_size", 0444, root,
-			   &priv->payload_size);
+			   &priv->fifos.payload_size);
 
 	/* statistics on fifo buffer usage */
 	for (i = 1; i < 32; i++) {
@@ -3074,7 +3088,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 		debugfs_create_u64(name, 0444, fifousage,
 				   &priv->stats.fifo_usage[i]);
 		debugfs_create_u32(name, 0444, fifoaddr,
-				   &priv->fifo_address[i]);
+				   &priv->fifos.fifo_address[i]);
 	}
 
 #endif
