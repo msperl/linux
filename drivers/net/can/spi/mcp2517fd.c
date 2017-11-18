@@ -37,11 +37,12 @@
 
 #define DEVICE_NAME "mcp2517fd"
 
+/* Register definitions */
 #define MCP2517FD_OST_DELAY_MS		3
 #define MCP2517FD_MIN_CLOCK_FREQUENCY	1000000
 #define MCP2517FD_MAX_CLOCK_FREQUENCY	40000000
 #define MCP2517FD_PLL_MULTIPLIER	10
-#define MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY \
+#define MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY				\
 	(MCP2517FD_MAX_CLOCK_FREQUENCY / MCP2517FD_PLL_MULTIPLIER)
 #define MCP2517FD_SCLK_DIVIDER		2
 
@@ -56,7 +57,7 @@
 #define INSTRUCTION_WRITE_CRC		0xA000
 #define INSTRUCTION_WRITE_SAVE		0xC000
 
-#define ADDRESS_MASK 			0x0fff
+#define ADDRESS_MASK			0x0fff
 
 #define MCP2517FD_SFR_BASE(x)		(0xE00 + (x))
 #define MCP2517FD_OSC			MCP2517FD_SFR_BASE(0x00)
@@ -138,7 +139,7 @@
 #  define CAN_CON_OPMODE_BITS		3
 #  define CAN_CON_OPMOD_SHIFT		21
 #  define CAN_CON_OPMOD_MASK					\
-	GENMASK(CAN_CON_OPMOD_SHIFT + CAN_CON_OPMODE_BITS -1,	\
+	GENMASK(CAN_CON_OPMOD_SHIFT + CAN_CON_OPMODE_BITS - 1,	\
 		CAN_CON_OPMOD_SHIFT)
 #  define CAN_CON_REQOP_BITS		3
 #  define CAN_CON_REQOP_SHIFT		24
@@ -159,33 +160,31 @@
 #  define CAN_CON_TXBWS_MASK					\
 	GENMASK(CAN_CON_TXBWS_SHIFT + CAN_CON_TXBWS_BITS - 1,	\
 		CAN_CON_TXBWS_SHIFT)
-#  define CAN_CON_DEFAULT					\
-	( CAN_CON_ISOCRCEN					\
-	  | CAN_CON_PXEDIS					\
-	  | CAN_CON_WAKFIL					\
-	  | (3 << CAN_CON_WFT_SHIFT)				\
-	  | CAN_CON_STEF					\
-	  | CAN_CON_TXQEN					\
-	  | (CAN_CON_MODE_CONFIG << CAN_CON_OPMOD_SHIFT)	\
-	  | (CAN_CON_MODE_CONFIG << CAN_CON_REQOP_SHIFT)	\
-	)
-#  define CAN_CON_DEFAULT_MASK			\
-	( CAN_CON_DNCNT_MASK			\
-	  |CAN_CON_ISOCRCEN			\
-	  | CAN_CON_PXEDIS			\
-	  | CAN_CON_WAKFIL			\
-	  | CAN_CON_WFT_MASK			\
-	  | CAN_CON_BRSDIS			\
-	  | CAN_CON_RTXAT			\
-	  | CAN_CON_ESIGM			\
-	  | CAN_CON_SERR2LOM			\
-	  | CAN_CON_STEF			\
-	  | CAN_CON_TXQEN			\
-	  | CAN_CON_OPMOD_MASK			\
-	  | CAN_CON_REQOP_MASK			\
-	  | CAN_CON_ABAT			\
-	  | CAN_CON_TXBWS_MASK			\
-	)
+#  define CAN_CON_DEFAULT				\
+	(CAN_CON_ISOCRCEN |				\
+	 CAN_CON_PXEDIS |				\
+	 CAN_CON_WAKFIL |				\
+	 (3 << CAN_CON_WFT_SHIFT) |			\
+	 CAN_CON_STEF |					\
+	 CAN_CON_TXQEN |				\
+	 (CAN_CON_MODE_CONFIG << CAN_CON_OPMOD_SHIFT) |	\
+	 (CAN_CON_MODE_CONFIG << CAN_CON_REQOP_SHIFT))
+#  define CAN_CON_DEFAULT_MASK	\
+	(CAN_CON_DNCNT_MASK |	\
+	 CAN_CON_ISOCRCEN |	\
+	 CAN_CON_PXEDIS |	\
+	 CAN_CON_WAKFIL |	\
+	 CAN_CON_WFT_MASK |	\
+	 CAN_CON_BRSDIS |	\
+	 CAN_CON_RTXAT |	\
+	 CAN_CON_ESIGM |	\
+	 CAN_CON_SERR2LOM |	\
+	 CAN_CON_STEF |		\
+	 CAN_CON_TXQEN |	\
+	 CAN_CON_OPMOD_MASK |	\
+	 CAN_CON_REQOP_MASK |	\
+	 CAN_CON_ABAT |		\
+	 CAN_CON_TXBWS_MASK)
 #define CAN_NBTCFG			CAN_SFR_BASE(0x04)
 #  define CAN_NBTCFG_SJW_BITS		7
 #  define CAN_NBTCFG_SJW_SHIFT		0
@@ -293,19 +292,19 @@
 #  define CAN_INT_WAKIF			BIT(14)
 #  define CAN_INT_IVMIF			BIT(15)
 #  define CAN_INT_IF_MASK		\
-	( CAN_INT_TXIF |		\
-	  CAN_INT_RXIF |		\
-	  CAN_INT_TBCIF	|		\
-	  CAN_INT_MODIF	|		\
-	  CAN_INT_TEFIF	|		\
-	  CAN_INT_ECCIF	|		\
-	  CAN_INT_SPICRCIF |		\
-	  CAN_INT_TXATIF |		\
-	  CAN_INT_RXOVIF |		\
-	  CAN_INT_CERRIF |		\
-	  CAN_INT_SERRIF |		\
-	  CAN_INT_WAKEIF |		\
-	  CAN_INT_IVMIF )
+	(CAN_INT_TXIF |			\
+	 CAN_INT_RXIF |			\
+	 CAN_INT_TBCIF	|		\
+	 CAN_INT_MODIF	|		\
+	 CAN_INT_TEFIF	|		\
+	 CAN_INT_ECCIF	|		\
+	 CAN_INT_SPICRCIF |		\
+	 CAN_INT_TXATIF |		\
+	 CAN_INT_RXOVIF |		\
+	 CAN_INT_CERRIF |		\
+	 CAN_INT_SERRIF |		\
+	 CAN_INT_WAKEIF |		\
+	 CAN_INT_IVMIF)
 #  define CAN_INT_IE_SHIFT		16
 #  define CAN_INT_TXIE			(CAN_INT_TXIF << CAN_INT_IE_SHIFT)
 #  define CAN_INT_RXIE			(CAN_INT_RXIF << CAN_INT_IE_SHIFT)
@@ -322,19 +321,19 @@
 #  define CAN_INT_WAKIE			(CAN_INT_WAKIF << CAN_INT_IE_SHIFT)
 #  define CAN_INT_IVMIE			(CAN_INT_IVMIF << CAN_INT_IE_SHIFT)
 #  define CAN_INT_IE_MASK		\
-	( CAN_INT_TXIE |		\
-	  CAN_INT_RXIE |		\
-	  CAN_INT_TBCIE	|		\
-	  CAN_INT_MODIE	|		\
-	  CAN_INT_TEFIE	|		\
-	  CAN_INT_ECCIE	|		\
-	  CAN_INT_SPICRCIE |		\
-	  CAN_INT_TXATIE |		\
-	  CAN_INT_RXOVIE |		\
-	  CAN_INT_CERRIE |		\
-	  CAN_INT_SERRIE |		\
-	  CAN_INT_WAKEIE |		\
-	  CAN_INT_IVMIE )
+	(CAN_INT_TXIE |			\
+	 CAN_INT_RXIE |			\
+	 CAN_INT_TBCIE	|		\
+	 CAN_INT_MODIE	|		\
+	 CAN_INT_TEFIE	|		\
+	 CAN_INT_ECCIE	|		\
+	 CAN_INT_SPICRCIE |		\
+	 CAN_INT_TXATIE |		\
+	 CAN_INT_RXOVIE |		\
+	 CAN_INT_CERRIE |		\
+	 CAN_INT_SERRIE |		\
+	 CAN_INT_WAKEIE |		\
+	 CAN_INT_IVMIE)
 #define CAN_RXIF			CAN_SFR_BASE(0x20)
 #define CAN_TXIF			CAN_SFR_BASE(0x24)
 #define CAN_RXOVIF			CAN_SFR_BASE(0x28)
@@ -590,19 +589,7 @@
 
 #define MCP2517FD_BUFFER_TXRX_SIZE 2048
 
-/* ideally these would be defined in uapi/linux/can.h */
-#define CAN_EFF_SID_SHIFT	(CAN_EFF_ID_BITS - CAN_SFF_ID_BITS)
-#define CAN_EFF_SID_BITS	CAN_SFF_ID_BITS
-#define CAN_EFF_SID_MASK				      \
-	GENMASK(CAN_EFF_SID_SHIFT + CAN_EFF_SID_BITS - 1,     \
-		CAN_EFF_SID_SHIFT)
-#define CAN_EFF_EID_SHIFT	0
-#define CAN_EFF_EID_BITS	CAN_EFF_SID_SHIFT
-#define CAN_EFF_EID_MASK				      \
-	GENMASK(CAN_EFF_EID_SHIFT + CAN_EFF_EID_BITS - 1,     \
-		CAN_EFF_EID_SHIFT)
-
-static const char *mcp2517fd_mode_names[] = {
+static const char * const mcp2517fd_mode_names[] = {
 	[CAN_CON_MODE_MIXED] = "can2.0+canfd",
 	[CAN_CON_MODE_SLEEP] = "sleep",
 	[CAN_CON_MODE_INTERNAL_LOOPBACK] = "internal loopback",
@@ -707,7 +694,7 @@ struct mcp2517fd_read_fifo_info {
 	int rx_count;
 	u32 tsmin;
 	u32 tsmax;
-} ;
+};
 
 struct mcp2517fd_priv {
 	struct can_priv	   can;
@@ -850,26 +837,26 @@ struct mcp2517fd_priv {
 };
 
 /* module parameters */
-bool use_bulk_release_fifos = false;
+bool use_bulk_release_fifos;
 module_param(use_bulk_release_fifos, bool, S_IRUGO | S_IWUSR | S_IWGRP);
 MODULE_PARM_DESC(use_bulk_release_fifos,
-		 "Use code that favours longer spi transfers over "
-		 "multiple transfers");
-bool use_complete_fdfifo_read = false;
+		 "Use code that favours longer spi transfers over multiple transfers");
+bool use_complete_fdfifo_read;
 module_param(use_complete_fdfifo_read, bool, S_IRUGO | S_IWUSR | S_IWGRP);
 MODULE_PARM_DESC(use_complete_fdfifo_read,
-		 "Use code that favours longer spi transfers "
-		 "(of unnecessary data) over multiple transfers for fd can");
+		 "Use code that favours longer spi transfers over multiple transfers for fd can");
+
+/* spi sync helper */
 
 /* wrapper arround spi_sync, that sets speed_hz */
 static int mcp2517fd_sync_transfer(struct spi_device *spi,
-				 struct spi_transfer *xfer,
-				 unsigned int xfers,
-				 int speed_hz)
+				   struct spi_transfer *xfer,
+				   unsigned int xfers,
+				   int speed_hz)
 {
 	int i;
 
-	for(i = 0; i < xfers; i++)
+	for (i = 0; i < xfers; i++)
 		xfer[i].speed_hz = speed_hz;
 
 	return spi_sync_transfer(spi, xfer, xfers);
@@ -877,9 +864,9 @@ static int mcp2517fd_sync_transfer(struct spi_device *spi,
 
 /* an optimization of spi_write_then_read that merges the transfers */
 static int mcp2517fd_write_then_read(struct spi_device *spi,
-				     const void* tx_buf,
+				     const void *tx_buf,
 				     unsigned int tx_len,
-				     void* rx_buf,
+				     void *rx_buf,
 				     unsigned int rx_len,
 				     int speed_hz)
 {
@@ -921,7 +908,7 @@ static int mcp2517fd_write_then_read(struct spi_device *spi,
 
 /* simple spi_write wrapper with speed_hz */
 static int mcp2517fd_write(struct spi_device *spi,
-			   const void* tx_buf,
+			   const void *tx_buf,
 			   unsigned int tx_len,
 			   int speed_hz)
 {
@@ -936,11 +923,11 @@ static int mcp2517fd_write(struct spi_device *spi,
 
 /* spi_sync wrapper similar to spi_write_then_read that optimizes transfers */
 static int mcp2517fd_write_then_write(struct spi_device *spi,
-				     const void* tx_buf,
-				     unsigned int tx_len,
-				     const void* tx2_buf,
-				     unsigned int tx2_len,
-				     int speed_hz)
+				      const void *tx_buf,
+				      unsigned int tx_len,
+				      const void *tx2_buf,
+				      unsigned int tx2_len,
+				      int speed_hz)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct spi_transfer xfer;
@@ -957,6 +944,8 @@ static int mcp2517fd_write_then_write(struct spi_device *spi,
 
 	return mcp2517fd_sync_transfer(spi, &xfer, 1, speed_hz);
 }
+
+/* mcp2517fd spi command/protocol helper */
 
 static void mcp2517fd_calc_cmd_addr(u16 cmd, u16 addr, u8 *data)
 {
@@ -992,11 +981,11 @@ static int mcp2517fd_cmd_readn(struct spi_device *spi, u32 reg,
 	return 0;
 }
 
-static int mcp2517fd_convert_to_cpu(u32* data, int n)
+static int mcp2517fd_convert_to_cpu(u32 *data, int n)
 {
 	int i;
 
-	for(i = 0; i < n; i++)
+	for (i = 0; i < n; i++)
 		data[i] = le32_to_cpu(data[i]);
 
 	return 0;
@@ -1010,19 +999,19 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 	int ret;
 
 	/* check that at least one bit is set */
-	if (! mask)
+	if (!mask)
 		return -EINVAL;
 
 	/* calculate first and last byte used */
-	first_byte = (ffs(mask) - 1)  >> 3;
-	last_byte = (fls(mask) - 1)  >> 3;
-	len_byte = last_byte - first_byte +1;
+	first_byte = (ffs(mask) - 1) >> 3;
+	last_byte = (fls(mask) - 1) >> 3;
+	len_byte = last_byte - first_byte + 1;
 
 	/* do a partial read */
 	*data = 0;
-	ret=mcp2517fd_cmd_readn(spi, reg,
-				((void *)data + first_byte), len_byte,
-				speed_hz);
+	ret = mcp2517fd_cmd_readn(spi, reg,
+				  ((void *)data + first_byte), len_byte,
+				  speed_hz);
 	if (ret)
 		return ret;
 
@@ -1043,7 +1032,7 @@ static int mcp2517fd_cmd_write_mask(struct spi_device *spi, u32 reg,
 	u8 cmd[2];
 
 	/* check that at least one bit is set */
-	if (! mask)
+	if (!mask)
 		return -EINVAL;
 
 	/* calculate first and last byte used */
@@ -1057,7 +1046,7 @@ static int mcp2517fd_cmd_write_mask(struct spi_device *spi, u32 reg,
 
 	return mcp2517fd_write_then_write(spi,
 					  cmd, sizeof(cmd),
-					  ((void *) &data + first_byte),
+					  ((void *)&data + first_byte),
 					  len_byte,
 					  speed_hz);
 }
@@ -1069,7 +1058,7 @@ static int mcp2517fd_cmd_write(struct spi_device *spi, u32 reg, u32 data,
 }
 
 static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
-			       void *data, int n, u32 speed_hz)
+				void *data, int n, u32 speed_hz)
 {
 	u8 cmd[2];
 	int ret;
@@ -1083,14 +1072,59 @@ static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
 	return 0;
 }
 
-static void mcp2517fd_mark_tx_pending(void * context)
+/* ideally these would be defined in uapi/linux/can.h */
+#define CAN_EFF_SID_SHIFT		(CAN_EFF_ID_BITS - CAN_SFF_ID_BITS)
+#define CAN_EFF_SID_BITS		CAN_SFF_ID_BITS
+#define CAN_EFF_SID_MASK				      \
+	GENMASK(CAN_EFF_SID_SHIFT + CAN_EFF_SID_BITS - 1,     \
+		CAN_EFF_SID_SHIFT)
+#define CAN_EFF_EID_SHIFT		0
+#define CAN_EFF_EID_BITS		CAN_EFF_SID_SHIFT
+#define CAN_EFF_EID_MASK				      \
+	GENMASK(CAN_EFF_EID_SHIFT + CAN_EFF_EID_BITS - 1,     \
+		CAN_EFF_EID_SHIFT)
+
+static void mcp2517fd_canid_to_mcpid(u32 can_id, u32 *id, u32 *flags)
+{
+	if (can_id & CAN_EFF_FLAG) {
+		int sid = (can_id & CAN_EFF_SID_MASK) >> CAN_EFF_SID_SHIFT;
+		int eid = (can_id & CAN_EFF_EID_MASK) >> CAN_EFF_EID_SHIFT;
+		*id = (eid << CAN_OBJ_ID_EID_SHIFT) |
+			(sid << CAN_OBJ_ID_SID_SHIFT);
+		*flags = CAN_OBJ_FLAGS_IDE;
+	} else {
+		*id = can_id & CAN_SFF_MASK;
+		*flags = 0;
+	}
+
+	*flags |= (can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+}
+
+static void mcp2517fd_mcpid_to_canid(u32 mcpid, u32 mcpflags, u32 *id)
+{
+	u32 sid = (mcpid & CAN_OBJ_ID_SID_MASK) >> CAN_OBJ_ID_SID_SHIFT;
+	u32 eid = (mcpid & CAN_OBJ_ID_EID_MASK) >> CAN_OBJ_ID_EID_SHIFT;
+
+	if (mcpflags & CAN_OBJ_FLAGS_IDE) {
+		*id = (eid << CAN_EFF_EID_SHIFT) |
+			(sid << CAN_EFF_SID_SHIFT) |
+			CAN_EFF_FLAG;
+	} else {
+		*id = sid;
+	}
+
+	*id |= (mcpflags & CAN_OBJ_FLAGS_RTR) ? CAN_RTR_FLAG : 0;
+}
+
+/* CAN transmit related*/
+
+static void mcp2517fd_mark_tx_pending(void *context)
 {
 	struct mcp2517fd_trigger_tx_message *txm = context;
 	struct spi_device *spi = txm->msg.spi;
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
-	/*
-	 * only here or in the irq handler this value is changed,
+	/* only here or in the irq handler this value is changed,
 	 * so there is no race condition and it does not require locking
 	 * serialization happens via spi_pump_message
 	 */
@@ -1110,7 +1144,7 @@ static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 	if (!priv->spi_transmit_fifos)
 		return -ENOMEM;
 
-	for(i = 0; i < priv->tx_fifos; i++) {
+	for (i = 0; i < priv->tx_fifos; i++) {
 		fifo = priv->tx_fifo_start + i;
 		txm = &priv->spi_transmit_fifos[i];
 		/* prepare the message */
@@ -1172,22 +1206,6 @@ static int mcp2517fd_transmit_message_common(
 	return NETDEV_TX_OK;
 }
 
-static void mcp2517fd_canid_to_mcpid(u32 can_id, u32 *id, u32 *flags)
-{
-	if (can_id & CAN_EFF_FLAG) {
-		int sid = (can_id & CAN_EFF_SID_MASK) >> CAN_EFF_SID_SHIFT;
-		int eid = (can_id & CAN_EFF_EID_MASK) >> CAN_EFF_EID_SHIFT;
-		*id = (eid << CAN_OBJ_ID_EID_SHIFT) |
-			(sid << CAN_OBJ_ID_SID_SHIFT);
-		*flags = CAN_OBJ_FLAGS_IDE;
-	} else {
-		*id = can_id & CAN_SFF_MASK;
-		*flags = 0;
-	}
-
-	*flags |= (can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
-}
-
 static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 					struct canfd_frame *frame)
 {
@@ -1236,7 +1254,7 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 					struct net_device *net)
 {
-        struct mcp2517fd_priv *priv = netdev_priv(net);
+	struct mcp2517fd_priv *priv = netdev_priv(net);
 	struct spi_device *spi = priv->spi;
 	u32 pending_mask;
 	int fifo;
@@ -1249,11 +1267,10 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 	pending_mask = priv->tx_pending_mask | priv->tx_submitted_mask;
 
 	/* decide on fifo to assign */
-	if (pending_mask) {
+	if (pending_mask)
 		fifo = ffs(pending_mask) - 2;
-	} else {
+	else
 		fifo = priv->tx_fifo_start + priv->tx_fifos - 1;
-	}
 
 	/* handle error - this should not happen... */
 	if (fifo < priv->tx_fifo_start) {
@@ -1282,27 +1299,13 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 			spi, fifo, (struct can_frame *)skb->data);
 
 	/* keep it for reference until the message really got transmitted */
-	if (ret == NETDEV_TX_OK) {
+	if (ret == NETDEV_TX_OK)
 		can_put_echo_skb(skb, priv->net, fifo);
-	}
 
 	return ret;
 }
 
-static void mcp2517fd_mcpid_to_canid(u32 mcpid, u32 mcpflags, u32 *id)
-{
-	u32 sid = (mcpid & CAN_OBJ_ID_SID_MASK) >> CAN_OBJ_ID_SID_SHIFT;
-	u32 eid = (mcpid & CAN_OBJ_ID_EID_MASK) >> CAN_OBJ_ID_EID_SHIFT;
-	if (mcpflags & CAN_OBJ_FLAGS_IDE) {
-		*id = (eid << CAN_EFF_EID_SHIFT) |
-			(sid << CAN_EFF_SID_SHIFT) |
-			CAN_EFF_FLAG;
-	} else {
-		*id = sid;
-	}
-
-	*id |= (mcpflags & CAN_OBJ_FLAGS_RTR) ? CAN_RTR_FLAG : 0;
-}
+/* CAN RX Related */
 
 static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 					 struct mcp2517fd_obj_rx *rx)
@@ -1314,11 +1317,11 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 
 	/* allocate the skb buffer */
 	skb = alloc_canfd_skb(priv->net, &frame);
-        if (!skb) {
-                dev_err(&spi->dev, "cannot allocate RX skb\n");
-                priv->net->stats.rx_dropped++;
-                return -ENOMEM;
-        }
+	if (!skb) {
+		dev_err(&spi->dev, "cannot allocate RX skb\n");
+		priv->net->stats.rx_dropped++;
+		return -ENOMEM;
+	}
 
 	mcp2517fd_mcpid_to_canid(rx->header.id, flags, &frame->can_id);
 	frame->flags |= (flags & CAN_OBJ_FLAGS_BRS) ? CANFD_BRS : 0;
@@ -1330,11 +1333,11 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 	memcpy(frame->data, rx->data, frame->len);
 
 	priv->net->stats.rx_packets++;
-        priv->net->stats.rx_bytes += frame->len;
+	priv->net->stats.rx_bytes += frame->len;
 
-        can_led_event(priv->net, CAN_LED_EVENT_RX);
+	can_led_event(priv->net, CAN_LED_EVENT_RX);
 
-        netif_rx_ni(skb);
+	netif_rx_ni(skb);
 
 	return 0;
 }
@@ -1350,11 +1353,11 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 
 	/* allocate the skb buffer */
 	skb = alloc_can_skb(priv->net, &frame);
-        if (!skb) {
-                dev_err(&spi->dev, "cannot allocate RX skb\n");
-                priv->net->stats.rx_dropped++;
-                return -ENOMEM;
-        }
+	if (!skb) {
+		dev_err(&spi->dev, "cannot allocate RX skb\n");
+		priv->net->stats.rx_dropped++;
+		return -ENOMEM;
+	}
 
 	mcp2517fd_mcpid_to_canid(rx->header.id, flags, &frame->can_id);
 
@@ -1366,17 +1369,31 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 	memcpy(frame->data, rx->data, len);
 
 	priv->net->stats.rx_packets++;
-        priv->net->stats.rx_bytes += len;
+	priv->net->stats.rx_bytes += len;
 
-        can_led_event(priv->net, CAN_LED_EVENT_RX);
+	can_led_event(priv->net, CAN_LED_EVENT_RX);
 
-        netif_rx_ni(skb);
+	netif_rx_ni(skb);
 
 	return 0;
 }
 
+static int mcp2517fd_process_queued_rx(struct spi_device *spi,
+				       struct mcp2517fd_obj_ts *obj)
+{
+	struct mcp2517fd_obj_rx *rx = container_of(
+		obj, struct mcp2517fd_obj_rx, header);
+
+	if (obj->flags & CAN_OBJ_FLAGS_FDF)
+		return mcp2517fd_can_transform_rx_fd(
+			spi, rx);
+	else
+		return mcp2517fd_can_transform_rx_normal(
+			spi, rx);
+}
+
 static int mcp2517fd_normal_release_fifos(struct spi_device *spi,
-					int start, int end)
+					  int start, int end)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	int ret;
@@ -1395,8 +1412,7 @@ static int mcp2517fd_normal_release_fifos(struct spi_device *spi,
 	return 0;
 }
 
-/*
- * unfortunately the CAN_FIFOCON are not directly consecutive
+/* unfortunately the CAN_FIFOCON are not directly consecutive
  * so the optimization of "clearing all in one spi_transfer"
  * would produce an overhead of 11 unnecessary bytes/fifo
  * - transferring 14 (2 cmd + 12 data) bytes
@@ -1421,8 +1437,10 @@ static int mcp2517fd_normal_release_fifos(struct spi_device *spi,
  * similarly the faster the CPU (and bigger the code cache) the
  * less effcient the optimization - the above case is border line.
  */
+
 #define FIFOCON_SPACING (CAN_FIFOCON(1) - CAN_FIFOCON(0))
-#define FIFOCON_SPACINGW (FIFOCON_SPACING/sizeof(u32))
+#define FIFOCON_SPACINGW (FIFOCON_SPACING / sizeof(u32))
+
 static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 					int start, int end)
 {
@@ -1432,7 +1450,7 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 
 	/* calculate start address and length */
 	int fifos = end - start;
-        int first_byte = (ffs(CAN_FIFOCON_UINC) - 1)  >> 3;
+	int first_byte = (ffs(CAN_FIFOCON_UINC) - 1)  >> 3;
 	int addr = CAN_FIFOCON(start);
 	int len = 1 + (fifos - 1) * FIFOCON_SPACING;
 
@@ -1449,13 +1467,13 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 
 	memset(buf, 0, sizeof(buf));
 	for (i = 0; i < end - start ; i++) {
-		if (i == priv->rx_fifos -1)
+		if (i == priv->rx_fifos - 1)
 			base |= CAN_FIFOCON_RXOVIE;
 		buf[FIFOCON_SPACINGW * i] = cpu_to_le32(base);
 	}
 
 	ret = mcp2517fd_cmd_writen(spi, addr + first_byte,
-				   (u8*)buf + first_byte,
+				   (u8 *)buf + first_byte,
 				   len,
 				   priv->spi_speed_hz);
 	if (ret)
@@ -1463,6 +1481,8 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 
 	return 0;
 }
+
+/* queued FIFO handling for release to system */
 
 static void mcp2517fd_clear_queued_fifos(struct spi_device *spi)
 {
@@ -1514,20 +1534,6 @@ static int mcp2517fd_process_queued_tef(struct spi_device *spi,
 	return 0;
 }
 
-static int mcp2517fd_process_queued_rx(struct spi_device *spi,
-				       struct mcp2517fd_obj_ts *obj)
-{
-	struct mcp2517fd_obj_rx *rx = container_of(
-		obj, struct mcp2517fd_obj_rx, header);
-
-	if (obj->flags & CAN_OBJ_FLAGS_FDF)
-		return mcp2517fd_can_transform_rx_fd(
-			spi, rx);
-	else
-		return mcp2517fd_can_transform_rx_normal(
-			spi, rx);
-}
-
 static int mcp2517fd_compare_obj_ts(const void *a, const void *b)
 {
 	const struct mcp2517fd_obj_ts * const *rxa = a;
@@ -1562,7 +1568,7 @@ static int mcp2517fd_process_queued_fifos(struct spi_device *spi)
 		} else {
 			ret = mcp2517fd_process_queued_rx(
 				spi, rfi->rxb[i]);
- 		}
+		}
 		if (ret)
 			return ret;
 	}
@@ -1590,8 +1596,7 @@ static int mcp2517fd_transform_rx(struct spi_device *spi,
 	return can_dlc2len(dlc);
 }
 
-/*
- * read_fifo implementations
+/* read_fifo implementations
  *
  * read_fifos is a simple implementation, that:
  *   * loops all fifos
@@ -1651,11 +1656,11 @@ static int mcp2517fd_read_fifos(struct spi_device *spi)
 	int ret;
 
 	/* read all the "open" segments in big chunks */
-	for(i = priv->rx_fifo_start ;
-	    i < priv->rx_fifo_start + priv->rx_fifos;
-	    i++) {
+	for (i = priv->rx_fifo_start;
+	     i < priv->rx_fifo_start + priv->rx_fifos;
+	     i++) {
 		if (!(mask & BIT(i)))
-		    continue;
+			continue;
 		/* the fifo to fill */
 		rx = (struct mcp2517fd_obj_rx *)
 			(priv->fifo_data + priv->fifo_address[i]);
@@ -1707,12 +1712,12 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 	int ret;
 
 	/* read all the "open" segments in big chunks */
-	for(i = priv->rx_fifo_start ;
-	    i < priv->rx_fifo_start + priv->rx_fifos;
-	    i++) {
+	for (i = priv->rx_fifo_start;
+	     i < priv->rx_fifo_start + priv->rx_fifos;
+	     i++) {
 		if (mask & BIT(i)) {
 			/* find the last set bit in sequence */
-			for(j = i ;
+			for (j = i;
 			    (j < priv->rx_fifo_start + priv->rx_fifos) &&
 				    (mask & BIT(j));
 			    j++) {
@@ -1788,12 +1793,9 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	count -= hweight_long(priv->status.txreq);
 	if (count <= 0) {
 		dev_err(&spi->dev,
-			"Strange situation within handle_tefif - count = %i\n",
+			"handle_tefif: unexpected count = %i\n",
 			count);
-		dev_err(&spi->dev,
-			"\tpending   : %08x",priv->tx_pending_mask);
-		dev_err(&spi->dev,
-			"\tprocessed : %08x",priv->tx_processed_mask);
+		return -EINVAL;
 	}
 
 	/* now clear TEF for each */
@@ -1810,10 +1812,10 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 
 		/* increment the counter to read next */
 		ret = mcp2517fd_cmd_write_mask(spi,
-					CAN_TEFCON,
-					CAN_TEFCON_UINC,
-					CAN_TEFCON_UINC,
-					priv->spi_speed_hz);
+					       CAN_TEFCON,
+					       CAN_TEFCON_UINC,
+					       CAN_TEFCON_UINC,
+					       priv->spi_speed_hz);
 
 		/* transform the data to system byte order */
 		mcp2517fd_obj_ts_from_le(&tef->header);
@@ -1864,7 +1866,7 @@ static int mcp2517fd_can_ist_handle_rxovif(struct spi_device *spi)
 	int ret;
 
 	/* clear all fifos that have an overflow bit set */
-	for(i = 0; i < 32; i++) {
+	for (i = 0; i < 32; i++) {
 		if (mask & BIT(i)) {
 			ret = mcp2517fd_cmd_write_mask(spi,
 						       CAN_FIFOSTA(i),
@@ -1930,8 +1932,7 @@ static int mcp2517fd_can_ist_handle_cerrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
-	/*
-	 * in principle we could also delay reading bdiag registers
+	/* in principle we could also delay reading bdiag registers
 	 * until we get here - it would add some extra delay in the
 	 * error case, but be slightly faster in the "normal" case.
 	 * slightly faster would be saving 8 bytes of spi transfer.
@@ -1975,6 +1976,36 @@ static int mcp2517fd_can_ist_handle_cerrif(struct spi_device *spi)
 	}
 
 	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_eccif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int ret;
+	u32 val;
+	u32 addr;
+
+	priv->can_err_id |= CAN_ERR_CRTL;
+	priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
+	priv->int_clear_mask |= CAN_INT_ECCIF;
+
+	/* read ECC status register */
+	ret = mcp2517fd_cmd_read(spi, MCP2517FD_ECCSTAT, &val,
+				 priv->spi_speed_hz);
+	if (ret)
+		return ret;
+
+	addr = (val & MCP2517FD_ECCSTAT_ERRADDR_MASK) >>
+		MCP2517FD_ECCSTAT_ERRADDR_SHIFT;
+
+	dev_err_ratelimited(&spi->dev,
+			    "ECC %s bit error at %03x\n",
+			    (val & MCP2517FD_ECCSTAT_DEDIF) ?
+			    "double" : "single",
+			    addr);
+
+	return mcp2517fd_cmd_write(spi, MCP2517FD_ECCSTAT, 0,
+				 priv->spi_speed_hz);
 }
 
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
@@ -2037,24 +2068,30 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 			return ret;
 	}
 
-	/* these we will just log for now */
 	if (priv->status.intf & CAN_INT_SERRIF) {
-		dev_err_ratelimited (&spi->dev, "Detected system error\n");
+		dev_err_ratelimited(&spi->dev, "Detected system error\n");
+		priv->can_err_id |= CAN_ERR_CRTL;
+		priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
+		/* maybe we should do some more here
+		 * - need to know the exact circumstances
+		 * under which this happens and what registers look like
+		 */
+		return -EINVAL;
 		priv->int_clear_mask |= CAN_INT_SERRIF;
 	}
 
+	/* message format interrupt */
 	if (priv->status.intf & CAN_INT_IVMIF) {
 		priv->can_err_id |= CAN_ERR_PROT;
 		priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
-		dev_err_ratelimited(&spi->dev, "Received Invalid message\n");
 		priv->int_clear_mask |= CAN_INT_IVMIF;
 	}
 
+	/* sram ECC error interrupt */
 	if (priv->status.intf & CAN_INT_ECCIF) {
-		priv->can_err_id |= CAN_ERR_CRTL;
-		priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
-		dev_err_ratelimited(&spi->dev, "ECC errors\n");
-		priv->int_clear_mask |= CAN_INT_ECCIF;
+		ret = mcp2517fd_can_ist_handle_eccif(spi);
+		if (ret)
+			return ret;
 	}
 
 	/* handle bus errors in more detail */
