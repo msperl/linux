@@ -2018,8 +2018,8 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	 *   the recived message shall be ignored
 	 * * TX MAB Underflow: when a TX Message is invalid
 	 *   due to ECC errors or TXMAB underflow
-	 *   in this mode the sytem will transition to restricted
-	 *   or Listen Only mode
+	 *   in this situatioon the system will transition to
+	 *   Restricted or Listen Only mode
 	 */
 
 	priv->can_err_id |= CAN_ERR_CRTL;
@@ -2028,11 +2028,11 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 
 	/* a mode change or ecc error would indicate TX MAB Undeflow */
 	if (priv->status.intf & (CAN_INT_MODIF | CAN_INT_ECCIF)) {
-		dev_err_ratelimited(&spi->dev, "TX MAB underflow\n");
+		dev_warn_ratelimited(&spi->dev, "TX MAB underflow\n");
 		priv->net->stats.tx_fifo_errors++;
 		priv->net->stats.tx_errors++;
 	} else {
-		dev_err_ratelimited(&spi->dev, "RX MAB overflow\n");
+		dev_warn_ratelimited(&spi->dev, "RX MAB overflow\n");
 		priv->net->stats.rx_dropped++;
 		priv->net->stats.rx_errors++;
 	}
@@ -2237,7 +2237,7 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 static int mcp2517fd_get_berr_counter(const struct net_device *net,
 				      struct can_berr_counter *bec)
 {
-        struct mcp2517fd_priv *priv = netdev_priv(net);
+	struct mcp2517fd_priv *priv = netdev_priv(net);
 
 	bec->txerr = (priv->status.trec & CAN_TREC_TEC_MASK) >>
 		CAN_TREC_TEC_SHIFT;
@@ -2247,9 +2247,9 @@ static int mcp2517fd_get_berr_counter(const struct net_device *net,
 	return 0;
 }
 
-
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
 {
+	/* TODO */
 }
 
 static int mcp2517fd_power_enable(struct regulator *reg, int enable)
@@ -2265,7 +2265,6 @@ static int mcp2517fd_power_enable(struct regulator *reg, int enable)
 
 static int mcp2517fd_do_set_mode(struct net_device *net, enum can_mode mode)
 {
-
 	switch (mode) {
 	case CAN_MODE_START:
 		break;
@@ -2399,23 +2398,20 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 			return ret;
 		break;
 	default:
-		/* otherwise it is no valid device (or in strange state) */
-
-		/*
+		/* otherwise there is no valid device (or in strange state)
+		 *
 		 * if PLL is enabled but not ready, then there may be
 		 * something "fishy"
 		 * this happened during driver development
-		 * (enabling pll, when when on wrong clock), so best warn about
-		 * such a possibility
+		 * (enabling pll, when when on wrong clock), so best warn
+		 * about such a possibility
 		 */
 		if ((val & (MCP2517FD_OSC_PLLEN | MCP2517FD_OSC_PLLRDY))
 		    == MCP2517FD_OSC_PLLEN)
 			dev_err(&spi->dev,
-				"mcp2517fd may be in a strange state"
-				" - a power disconnect may be required\n");
+				"mcp2517fd may be in a strange state - a power disconnect may be required\n");
 
 		return -ENODEV;
-		break;
 	}
 
 	/* check if we are in config mode already*/
@@ -2430,8 +2426,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	if ((val & CAN_CON_DEFAULT_MASK) == CAN_CON_DEFAULT)
 		return 0;
 
-	/*
-	 * as per datasheet a reset only works in Config Mode
+	/* as per datasheet a reset only works in Config Mode
 	 * so as we have in principle no knowledge of the current
 	 * mode that the controller is in we have no safe way
 	 * to detect the device correctly
@@ -2461,7 +2456,9 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-	dev_dbg(&spi->dev, "CAN_CON 0x%08x\n",val);
+
+	/* just allow dumping the register if we ever get here */
+	dev_dbg(&spi->dev, "read CAN_CON = 0x%08x\n", val);
 
 	/* apply mask and check */
 	if ((val & CAN_CON_DEFAULT_MASK) != CAN_CON_DEFAULT)
@@ -2513,7 +2510,7 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 	unsigned long timeout;
 
 	/* manage clock_out divider */
-	switch(priv->clock_odiv) {
+	switch (priv->clock_odiv) {
 	case 10:
 		val |= (MCP2517FD_OSC_CLKODIV_10)
 			<< MCP2517FD_OSC_CLKODIV_SHIFT;
@@ -2550,7 +2547,7 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 
 	/* wait for synced pll/osc/sclk */
 	timeout = jiffies + MCP2517FD_OSC_POLLING_JIFFIES;
-	while(jiffies <= timeout) {
+	while (time_before_eq(jiffies, timeout)) {
 		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
 					 &priv->regs.osc,
 					 priv->spi_setup_speed_hz);
@@ -2579,11 +2576,11 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	/* clear all filter */
 	for (i = 0; i < 32; i++) {
 		ret = mcp2517fd_cmd_write(spi, CAN_FLTOBJ(i), 0,
-			priv->spi_setup_speed_hz);
+					  priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
 		ret = mcp2517fd_cmd_write(spi, CAN_FLTMASK(i), 0,
-			priv->spi_setup_speed_hz);
+					  priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
 		ret = mcp2517fd_cmd_write_mask(
@@ -2746,9 +2743,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		fifo = priv->rx_fifo_start + i;
 		ret = mcp2517fd_cmd_read(spi, CAN_FIFOUA(fifo),
 					 &val, priv->spi_setup_speed_hz);
-               if (ret)
-                       return ret;
-               priv->fifo_address[fifo] = val;
+		if (ret)
+			return ret;
+	       priv->fifo_address[fifo] = val;
 	}
 
 	/* now get back into config mode */
@@ -2807,7 +2804,7 @@ static int mcp2517fd_setup(struct net_device *net,
 	switch (priv->gpio1_mode) {
 	case gpio_mode_standby:
 		dev_err(&spi->dev,
-			"GPIO1 does not support transciever standby\n");
+			"GPIO1 does not support transceiver standby\n");
 		return -EINVAL;
 	case gpio_mode_int: /* asserted low on RXIF */
 	case gpio_mode_out_low:
@@ -2893,7 +2890,7 @@ static int mcp2517fd_open(struct net_device *net)
 
 	priv->irq_state = 0;
 	priv->irq_loops = 0;
-        priv->force_quit = 0;
+	priv->force_quit = 0;
 	ret = request_threaded_irq(spi->irq, NULL,
 				   mcp2517fd_can_ist,
 				   IRQF_ONESHOT | IRQF_TRIGGER_LOW,
@@ -2937,7 +2934,7 @@ open_unlock:
 
 static void mcp2517fd_clean(struct net_device *net)
 {
-        struct mcp2517fd_priv *priv = netdev_priv(net);
+	struct mcp2517fd_priv *priv = netdev_priv(net);
 	int i;
 
 	for (i = 0; i < priv->tx_fifos; i++) {
@@ -3012,9 +3009,9 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	int i;
 
 	/* create the net device name */
-	snprintf(name, sizeof(name), DEVICE_NAME"-%s",priv->net->name);
-	priv-> debugfs_dir = debugfs_create_dir(name, NULL);
-	root = priv-> debugfs_dir;
+	snprintf(name, sizeof(name), DEVICE_NAME "-%s", priv->net->name);
+	priv->debugfs_dir = debugfs_create_dir(name, NULL);
+	root = priv->debugfs_dir;
 
 	rx = debugfs_create_dir("rx", root);
 	tx = debugfs_create_dir("tx", root);
@@ -3082,9 +3079,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 static void mcp2517fd_debugfs_remove(struct mcp2517fd_priv *priv)
 {
 #if defined(CONFIG_DEBUG_FS)
-       	if (priv-> debugfs_dir)
-		debugfs_remove_recursive(priv-> debugfs_dir);
-	priv-> debugfs_dir = NULL;
+	debugfs_remove_recursive(priv->debugfs_dir);
 #endif
 }
 
@@ -3100,13 +3095,15 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 					 0, &val);
 	if (!ret) {
 		switch (val) {
-		case 1: priv->clock_div2 = false; break;
-		case 2: priv->clock_div2 = true; break;
+		case 1:
+			priv->clock_div2 = false;
+			break;
+		case 2:
+			priv->clock_div2 = true;
+			break;
 		default:
 			dev_err(&spi->dev,
-				"Invalid value in device tree for "
-				"microchip,clock_div: %u"
-				" - valid_values: 1, 2\n",
+				"Invalid value in device tree for microchip,clock_div: %u - valid_values: 1, 2\n",
 				val);
 			return -EINVAL;
 		}
@@ -3124,9 +3121,7 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 			break;
 		default:
 			dev_err(&spi->dev,
-				"Invalid value in device tree for "
-				"microchip,clock_out_div: %u"
-				" - valid values: 0, 1, 2, 4, 10\n",
+				"Invalid value in device tree for microchip,clock_out_div: %u - valid values: 0, 1, 2, 4, 10\n",
 				val);
 			return -EINVAL;
 		}
@@ -3136,16 +3131,24 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 					 0, &val);
 	if (!ret) {
 		switch (val) {
-		case 0: priv->gpio0_mode = gpio_mode_in; break;
-		case 1: priv->gpio0_mode = gpio_mode_int; break;
-		case 2: priv->gpio0_mode = gpio_mode_out_low; break;
-		case 3: priv->gpio0_mode = gpio_mode_out_high; break;
-		case 4: priv->gpio0_mode = gpio_mode_standby; break;
+		case 0:
+			priv->gpio0_mode = gpio_mode_in;
+			break;
+		case 1:
+			priv->gpio0_mode = gpio_mode_int;
+			break;
+		case 2:
+			priv->gpio0_mode = gpio_mode_out_low;
+			break;
+		case 3:
+			priv->gpio0_mode = gpio_mode_out_high;
+			break;
+		case 4:
+			priv->gpio0_mode = gpio_mode_standby;
+			break;
 		default:
 			dev_err(&spi->dev,
-				"Invalid value in device tree for "
-				"microchip,gpio0_mode: %u"
-				" - valid values: 0, 1, 2, 3, 4\n",
+				"Invalid value in device tree for microchip,gpio0_mode: %u - valid values: 0, 1, 2, 3, 4\n",
 				val);
 			return -EINVAL;
 		}
@@ -3157,15 +3160,21 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 					 0, &val);
 	if (!ret) {
 		switch (val) {
-		case 0: priv->gpio1_mode = gpio_mode_in; break;
-		case 1: priv->gpio1_mode = gpio_mode_int; break;
-		case 2: priv->gpio1_mode = gpio_mode_out_low; break;
-		case 3: priv->gpio1_mode = gpio_mode_out_high; break;
+		case 0:
+			priv->gpio1_mode = gpio_mode_in;
+			break;
+		case 1:
+			priv->gpio1_mode = gpio_mode_int;
+			break;
+		case 2:
+			priv->gpio1_mode = gpio_mode_out_low;
+			break;
+		case 3:
+			priv->gpio1_mode = gpio_mode_out_high;
+			break;
 		default:
 			dev_err(&spi->dev,
-				"Invalid value in device tree for "
-				"microchip,gpio1_mode: %u"
-				" - valif_values: 0, 1, 2, 3, 4\n",
+				"Invalid value in device tree for microchip,gpio1_mode: %u - valif_values: 0, 1, 2, 3, 4\n",
 				val);
 			return -EINVAL;
 		}
@@ -3202,14 +3211,12 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	}
 
 	clk = devm_clk_get(&spi->dev, NULL);
-	if (IS_ERR(clk)) {
+	if (IS_ERR(clk))
 		return PTR_ERR(clk);
-	} else {
-		freq = clk_get_rate(clk);
-	}
+	freq = clk_get_rate(clk);
 
-	if (freq < MCP2517FD_MIN_CLOCK_FREQUENCY
-	    || freq > MCP2517FD_MAX_CLOCK_FREQUENCY) {
+	if ((freq < MCP2517FD_MIN_CLOCK_FREQUENCY) ||
+	    (freq > MCP2517FD_MAX_CLOCK_FREQUENCY)) {
 		dev_err(&spi->dev,
 			"Clock frequency %i is not in range\n", freq);
 		return -ERANGE;
@@ -3328,7 +3335,6 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	SET_NETDEV_DEV(net, &spi->dev);
 
-
 	ret = mcp2517fd_hw_probe(spi);
 	/* on error retry a second time */
 	if (ret == -ENODEV) {
@@ -3426,11 +3432,10 @@ static int __maybe_unused mcp2517fd_can_resume(struct device *dev)
 	if (priv->after_suspend & AFTER_SUSPEND_POWER)
 		mcp2517fd_power_enable(priv->power, 1);
 
-	if (priv->after_suspend & AFTER_SUSPEND_UP) {
+	if (priv->after_suspend & AFTER_SUSPEND_UP)
 		mcp2517fd_power_enable(priv->transceiver, 1);
-	} else {
+	else
 		priv->after_suspend = 0;
-	}
 
 	priv->force_quit = 0;
 
