@@ -760,8 +760,13 @@ struct mcp2517fd_priv {
 	u8 rx_fifo_start;
 	u32 rx_fifo_mask;  /* bitmask of which fifo is a rx fifo */
 
-	/* stats on number of rx overflows */
-	u64 rx_overflow;
+	/* statistics */
+	struct {
+		/* stats on number of rx overflows */
+		u64 rx_overflow;
+		/* statistics of FIFO usage */
+		u64 fifo_usage[32];
+	} stats;
 
 	/* the current status of the mcp2517fd */
 	struct {
@@ -820,9 +825,6 @@ struct mcp2517fd_priv {
 
 	/* status of the tx_queue enabled/disabled */
 	u32 tx_queue_status;
-
-	/* statistics of FIFO usage */
-	u64 fifo_usage[32];
 
 	/* memory image of FIFO RAM on mcp2517fd */
 	u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
@@ -1290,7 +1292,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 
 	/* mark as submitted */
 	priv->tx_submitted_mask |= BIT(fifo);
-	priv->fifo_usage[fifo]++;
+	priv->stats.fifo_usage[fifo]++;
 
 	/* now process it for real */
 	if (can_is_canfd_skb(skb))
@@ -1695,7 +1697,7 @@ static int mcp2517fd_read_fifos(struct spi_device *spi)
 		if (ret)
 			return ret;
 		/* increment fifo_usage */
-		priv->fifo_usage[i]++;
+		priv->stats.fifo_usage[i]++;
 	}
 
 	return 0;
@@ -1755,7 +1757,7 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 				/* process fifo stats */
 				mcp2517fd_transform_rx(spi, rx);
 				/* increment usage */
-				priv->fifo_usage[i]++;
+				priv->stats.fifo_usage[i]++;
 			}
 		}
 	}
@@ -1880,7 +1882,7 @@ static int mcp2517fd_can_ist_handle_rxovif(struct spi_device *spi)
 			/* update statistics */
 			priv->net->stats.rx_over_errors++;
 			priv->net->stats.rx_errors++;
-			priv->rx_overflow++;
+			priv->stats.rx_overflow++;
 			priv->can_err_id |= CAN_ERR_CRTL;
 			priv->can_err_data[1] |= CAN_ERR_CRTL_RX_OVERFLOW;
 		}
@@ -3049,7 +3051,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_u8("fifo_start", 0444, rx, &priv->rx_fifo_start);
 	debugfs_create_u8("fifo_count", 0444, rx, &priv->rx_fifos);
 	debugfs_create_x32("fifo_mask", 0444, rx, &priv->rx_fifo_mask);
-	debugfs_create_u64("rx_overflow", 0444, rx, &priv->rx_overflow);
+	debugfs_create_u64("rx_overflow", 0444, rx, &priv->stats.rx_overflow);
 
 	debugfs_create_u8("fifo_start", 0444, tx, &priv->tx_fifo_start);
 	debugfs_create_u8("fifo_count", 0444, tx, &priv->tx_fifos);
@@ -3070,7 +3072,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	for (i = 1; i < 32; i++) {
 		snprintf(name, sizeof(name), "%02i", i);
 		debugfs_create_u64(name, 0444, fifousage,
-				   &priv->fifo_usage[i]);
+				   &priv->stats.fifo_usage[i]);
 		debugfs_create_u32(name, 0444, fifoaddr,
 				   &priv->fifo_address[i]);
 	}
