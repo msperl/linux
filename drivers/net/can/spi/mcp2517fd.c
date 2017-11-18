@@ -713,20 +713,22 @@ struct mcp2517fd_priv {
 #define IRQ_STATE_RUNNING 1
 #define IRQ_STATE_HANDLED 2
 
-	/* status of the tx_queue */
+	/* status of the tx_queue enabled/disabled */
 	u32 tx_queue_status;
 
 	/* clock configuration */
-	bool clock_pll;
-	bool clock_div2;
-	int  clock_odiv;
+	struct {
+		bool clock_pll;
+		bool clock_div2;
+		int  clock_odiv;
 
-	/* GPIO configuration */
-	enum mcp2517fd_gpio_mode  gpio0_mode;
-	enum mcp2517fd_gpio_mode  gpio1_mode;
-	bool gpio_opendrain;
-	bool txcan_opendrain;
-	bool int_opendrain;
+		/* GPIO configuration */
+		enum mcp2517fd_gpio_mode  gpio0_mode;
+		enum mcp2517fd_gpio_mode  gpio1_mode;
+		bool gpio_opendrain;
+		bool txcan_opendrain;
+		bool int_opendrain;
+	} config;
 
 	/* the distinct spi_speeds to use for spi communication */
 	u32 spi_setup_speed_hz;
@@ -2501,16 +2503,16 @@ static int mcp2517fd_set_normal_mode(struct spi_device *spi)
 static int mcp2517fd_setup_osc(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	int val = ((priv->clock_pll) ? MCP2517FD_OSC_PLLEN : 0)
-		| ((priv->clock_div2) ? MCP2517FD_OSC_SCLKDIV : 0);
-	int waitfor = ((priv->clock_pll) ? MCP2517FD_OSC_PLLRDY : 0)
-		| ((priv->clock_div2) ? MCP2517FD_OSC_SCLKRDY : 0)
+	int val = ((priv->config.clock_pll) ? MCP2517FD_OSC_PLLEN : 0)
+		| ((priv->config.clock_div2) ? MCP2517FD_OSC_SCLKDIV : 0);
+	int waitfor = ((priv->config.clock_pll) ? MCP2517FD_OSC_PLLRDY : 0)
+		| ((priv->config.clock_div2) ? MCP2517FD_OSC_SCLKRDY : 0)
 		| MCP2517FD_OSC_OSCRDY;
 	int ret;
 	unsigned long timeout;
 
 	/* manage clock_out divider */
-	switch (priv->clock_odiv) {
+	switch (priv->config.clock_odiv) {
 	case 10:
 		val |= (MCP2517FD_OSC_CLKODIV_10)
 			<< MCP2517FD_OSC_CLKODIV_SHIFT;
@@ -2535,7 +2537,7 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 	default:
 		dev_err(&spi->dev,
 			"Unsupported output clock divider %i\n",
-			priv->clock_odiv);
+			priv->config.clock_odiv);
 		return -EINVAL;
 	}
 
@@ -2783,25 +2785,25 @@ static int mcp2517fd_setup(struct net_device *net,
 	val = 0; /* PUSHPULL INT , TXCAN PUSH/PULL, no Standby */
 
 	/* SOF/CLOCKOUT pin 3 */
-	if (priv->clock_odiv < 0)
+	if (priv->config.clock_odiv < 0)
 		val |= MCP2517FD_IOCON_SOF;
 	/* GPIO0 - pin 9 */
-	switch (priv->gpio0_mode) {
+	switch (priv->config.gpio0_mode) {
 	case gpio_mode_standby:
 	case gpio_mode_int: /* asserted low on TXIF */
 	case gpio_mode_out_low:
 	case gpio_mode_out_high:
 	case gpio_mode_in:
-		val |= priv->gpio0_mode;
+		val |= priv->config.gpio0_mode;
 		break;
 	default: /* GPIO IN */
 		dev_err(&spi->dev,
 			"GPIO1 does not support mode %08x\n",
-			priv->gpio0_mode);
+			priv->config.gpio0_mode);
 		return -EINVAL;
 	}
 	/* GPIO1 - pin 8 */
-	switch (priv->gpio1_mode) {
+	switch (priv->config.gpio1_mode) {
 	case gpio_mode_standby:
 		dev_err(&spi->dev,
 			"GPIO1 does not support transceiver standby\n");
@@ -2810,20 +2812,20 @@ static int mcp2517fd_setup(struct net_device *net,
 	case gpio_mode_out_low:
 	case gpio_mode_out_high:
 	case gpio_mode_in:
-		val |= priv->gpio1_mode << 1;
+		val |= priv->config.gpio1_mode << 1;
 		break;
 	default:
 		dev_err(&spi->dev,
 			"GPIO1 does not support mode %08x\n",
-			priv->gpio0_mode);
+			priv->config.gpio0_mode);
 		return -EINVAL;
 	}
 	/* INT/GPIO pins as open drain */
-	if (priv->gpio_opendrain)
+	if (priv->config.gpio_opendrain)
 		val |= MCP2517FD_IOCON_INTOD;
-	if (priv->txcan_opendrain)
+	if (priv->config.txcan_opendrain)
 		val |= MCP2517FD_IOCON_TXCANOD; /* OpenDrain TXCAN */
-	if (priv->int_opendrain)
+	if (priv->config.int_opendrain)
 		val |= MCP2517FD_IOCON_INTOD; /* OpenDrain INT pins */
 
 	priv->regs.iocon = val;
@@ -3096,10 +3098,10 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 	if (!ret) {
 		switch (val) {
 		case 1:
-			priv->clock_div2 = false;
+			priv->config.clock_div2 = false;
 			break;
 		case 2:
-			priv->clock_div2 = true;
+			priv->config.clock_div2 = true;
 			break;
 		default:
 			dev_err(&spi->dev,
@@ -3117,7 +3119,7 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 		case 2:
 		case 4:
 		case 10:
-			priv->clock_odiv = val;
+			priv->config.clock_odiv = val;
 			break;
 		default:
 			dev_err(&spi->dev,
@@ -3132,19 +3134,19 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 	if (!ret) {
 		switch (val) {
 		case 0:
-			priv->gpio0_mode = gpio_mode_in;
+			priv->config.gpio0_mode = gpio_mode_in;
 			break;
 		case 1:
-			priv->gpio0_mode = gpio_mode_int;
+			priv->config.gpio0_mode = gpio_mode_int;
 			break;
 		case 2:
-			priv->gpio0_mode = gpio_mode_out_low;
+			priv->config.gpio0_mode = gpio_mode_out_low;
 			break;
 		case 3:
-			priv->gpio0_mode = gpio_mode_out_high;
+			priv->config.gpio0_mode = gpio_mode_out_high;
 			break;
 		case 4:
-			priv->gpio0_mode = gpio_mode_standby;
+			priv->config.gpio0_mode = gpio_mode_standby;
 			break;
 		default:
 			dev_err(&spi->dev,
@@ -3153,7 +3155,7 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 			return -EINVAL;
 		}
 	} else {
-		priv->gpio0_mode = gpio_mode_in;
+		priv->config.gpio0_mode = gpio_mode_in;
 	}
 
 	ret = of_property_read_u32_index(np, "microchip,gpio1_mode",
@@ -3161,16 +3163,16 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 	if (!ret) {
 		switch (val) {
 		case 0:
-			priv->gpio1_mode = gpio_mode_in;
+			priv->config.gpio1_mode = gpio_mode_in;
 			break;
 		case 1:
-			priv->gpio1_mode = gpio_mode_int;
+			priv->config.gpio1_mode = gpio_mode_int;
 			break;
 		case 2:
-			priv->gpio1_mode = gpio_mode_out_low;
+			priv->config.gpio1_mode = gpio_mode_out_low;
 			break;
 		case 3:
-			priv->gpio1_mode = gpio_mode_out_high;
+			priv->config.gpio1_mode = gpio_mode_out_high;
 			break;
 		default:
 			dev_err(&spi->dev,
@@ -3179,16 +3181,16 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 			return -EINVAL;
 		}
 	} else {
-		priv->gpio1_mode = gpio_mode_in;
+		priv->config.gpio1_mode = gpio_mode_in;
 	}
 
-	priv->gpio_opendrain = of_property_read_bool(
+	priv->config.gpio_opendrain = of_property_read_bool(
 		np, "microchip,gpio_opendrain");
 
-	priv->txcan_opendrain = of_property_read_bool(
+	priv->config.txcan_opendrain = of_property_read_bool(
 		np, "microchip,txcan_opendrain");
 
-	priv->int_opendrain = of_property_read_bool(
+	priv->config.int_opendrain = of_property_read_bool(
 		np, "microchip,int_opendrain");
 #endif
 	return 0;
@@ -3264,19 +3266,20 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, priv);
 
 	/* set up gpio modes as GPIO INT */
-	priv->gpio0_mode = gpio_mode_int;
-	priv->gpio1_mode = gpio_mode_int;
+	priv->config.gpio0_mode = gpio_mode_int;
+	priv->config.gpio1_mode = gpio_mode_int;
 	/* all by default as push/pull */
-	priv->gpio_opendrain = false;
-	priv->txcan_opendrain = false;
-	priv->int_opendrain = false;
+	priv->config.gpio_opendrain = false;
+	priv->config.txcan_opendrain = false;
+	priv->config.int_opendrain = false;
 	/* do not use the SCK clock divider of 2 */
-	priv->clock_div2 = false;
+	priv->config.clock_div2 = false;
 	/* clock output is divided by 10 */
-	priv->clock_odiv = 10;
+	priv->config.clock_odiv = 10;
 
 	/* if we have a clock that is smaller then 4MHz, then enable the pll */
-	priv->clock_pll = (freq <= MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY);
+	priv->config.clock_pll =
+		(freq <= MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY);
 
 	/* check in device tree for overrrides */
 	ret = mcp2517fd_of_parse(priv);
@@ -3285,7 +3288,7 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	/* decide on real can clock rate */
 	priv->can.clock.freq = freq;
-	if (priv->clock_pll) {
+	if (priv->config.clock_pll) {
 		priv->can.clock.freq *= MCP2517FD_PLL_MULTIPLIER;
 		if (priv->can.clock.freq > MCP2517FD_MAX_CLOCK_FREQUENCY) {
 			dev_err(&spi->dev,
@@ -3295,13 +3298,13 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 			return -EINVAL;
 		}
 	}
-	if (priv->clock_div2)
+	if (priv->config.clock_div2)
 		priv->can.clock.freq /= MCP2517FD_SCLK_DIVIDER;
 
 	/* calclculate the clock frequencies to use */
 	priv->spi_setup_speed_hz = freq / 2;
 	priv->spi_speed_hz = priv->can.clock.freq / 2;
-	if (priv->clock_div2) {
+	if (priv->config.clock_div2) {
 		priv->spi_setup_speed_hz /= MCP2517FD_SCLK_DIVIDER;
 		priv->spi_speed_hz /= MCP2517FD_SCLK_DIVIDER;
 	}
