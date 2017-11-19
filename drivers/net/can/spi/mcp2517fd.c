@@ -3031,6 +3031,12 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	status = debugfs_create_dir("status", root);
 	regs = debugfs_create_dir("regs", root);
 
+	/* add spi speed info */
+	debugfs_create_u32("spi_setup_speed_hz", 0444, root,
+			   &priv->spi_setup_speed_hz);
+	debugfs_create_u32("spi_speed_hz", 0444, root,
+			   &priv->spi_speed_hz);
+
 	/* add irq state info */
 	debugfs_create_u64("irq_loops", 0444, root, &priv->irq_loops);
 	debugfs_create_u32("irq_state", 0444, root, &priv->irq_state);
