@@ -858,6 +858,9 @@ bool use_complete_fdfifo_read;
 module_param(use_complete_fdfifo_read, bool, S_IRUGO | S_IWUSR | S_IWGRP);
 MODULE_PARM_DESC(use_complete_fdfifo_read,
 		 "Use code that favours longer spi transfers over multiple transfers for fd can");
+unsigned int tx_fifos;
+module_param(tx_fifos, uint, S_IRUGO | S_IWUSR | S_IWGRP);
+MODULE_PARM_DESC(tx_fifos, "Number of tx-fifos to configure\n");
 
 /* spi sync helper */
 
@@ -2587,7 +2590,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				struct spi_device *spi)
 {
 	u32 con_val = priv->regs.con & (~CAN_CON_REQOP_MASK);
-	u32 val;
+	u32 val, available_memory, tx_memory_used;
 	int ret;
 	int i, fifo;
 
@@ -2622,12 +2625,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		priv->fifos.payload_mode = CAN_TXQCON_PLSIZE_8;
 
 		/* 7 tx fifos starting at fifo 1 */
-		priv->fifos.tx_fifo_start = 1;
 		priv->fifos.tx_fifos = 7;
 
-		/* 24 rx fifos starting at fifo 8 with 2 buffers/fifo */
-		priv->fifos.rx_fifo_start = 8;
-		priv->fifos.rx_fifos = 24;
+		/* 24 rx fifos with 1 buffers/fifo */
 		priv->fifos.rx_fifo_depth = 1;
 
 		break;
@@ -2639,19 +2639,63 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		priv->fifos.payload_size = 64;
 		priv->fifos.payload_mode = CAN_TXQCON_PLSIZE_64;
 
-		/* 7 tx fifos starting at fifo 1 */
-		priv->fifos.tx_fifo_start = 1;
+		/* 7 tx fifos */
 		priv->fifos.tx_fifos = 7;
 
-		/* 19 rx fifos starting at fifo 8 with 1 buffer/fifo */
-		priv->fifos.rx_fifo_start = 8;
-		priv->fifos.rx_fifos = 19;
+		/* 19 rx fifos with 1 buffer/fifo */
 		priv->fifos.rx_fifo_depth = 1;
 
 		break;
 	default:
 		return -EINVAL;
 	}
+
+	/* if defined as a module modify the number of tx_fifos */
+	if (tx_fifos) {
+		dev_info(&spi->dev,
+			 "Using %i tx-fifos as per module parameter\n",
+			 tx_fifos);
+		priv->fifos.tx_fifos = tx_fifos;
+	}
+
+	/* check range - we need 1 RX-fifo and one tef-fifo, hence 30 */
+	if (priv->fifos.tx_fifos > 30) {
+		dev_err(&spi->dev,
+			"There is an absolute maximum of 30 tx-fifos\n");
+		return -EINVAL;
+	}
+
+	tx_memory_used = priv->fifos.tx_fifos * (
+		sizeof(struct mcp2517fd_obj_tef) +
+		sizeof(struct mcp2517fd_obj_tx) +
+		priv->fifos.payload_size
+		);
+	/* check that we are not exceeding memory limits with 1 RX buffer */
+	if (tx_memory_used + (sizeof(struct mcp2517fd_obj_rx) +
+		   priv->fifos.payload_size) > MCP2517FD_BUFFER_TXRX_SIZE) {
+		dev_err(&spi->dev, "Configured %i tx-fifos exceeds available memory already\n",
+			priv->fifos.tx_fifos);
+		return -EINVAL;
+	}
+
+	/* calculate possible amount of RX fifos */
+	available_memory = MCP2517FD_BUFFER_TXRX_SIZE - tx_memory_used;
+
+	priv->fifos.rx_fifos = available_memory /
+		(sizeof(struct mcp2517fd_obj_rx) +
+		 priv->fifos.payload_size) /
+		priv->fifos.rx_fifo_depth;
+
+	/* we only support 31 FIFOS in total (TEF = FIFO0),
+	 * so modify rx accordingly
+	 */
+	if (priv->fifos.tx_fifos + priv->fifos.rx_fifos > 31)
+		priv->fifos.rx_fifos = 32 - priv->fifos.tx_fifos;
+
+	/* calculate rx/tx fifo start */
+	priv->fifos.tx_fifo_start = 1;
+	priv->fifos.rx_fifo_start =
+		priv->fifos.tx_fifo_start + priv->fifos.tx_fifos;
 
 	/* set up TEF SIZE to the number of tx_fifos and IRQ */
 	priv->regs.tefcon = CAN_TEFCON_FRESET |
