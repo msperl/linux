@@ -709,13 +709,6 @@ struct mcp2517fd_priv {
 	/* the actual model of the mcp2517fd */
 	enum mcp2517fd_model model;
 
-	/* interrupt handler state and statistics */
-	u64 irq_loops;
-	u32 irq_state;
-#define IRQ_STATE_NEVER_RUN 0
-#define IRQ_STATE_RUNNING 1
-#define IRQ_STATE_HANDLED 2
-
 	struct {
 		/* clock configuration */
 		bool clock_pll;
@@ -772,6 +765,16 @@ struct mcp2517fd_priv {
 
 	/* statistics */
 	struct {
+		/* number of calls to the irq handler */
+		u64 irq_calls;
+		/* number of loops inside the irq handler */
+		u64 irq_loops;
+
+		/* interrupt handler state and statistics */
+		u32 irq_state;
+#define IRQ_STATE_NEVER_RUN 0
+#define IRQ_STATE_RUNNING 1
+#define IRQ_STATE_HANDLED 2
 		/* stats on number of rx overflows */
 		u64 rx_overflow;
 		/* statistics of FIFO usage */
@@ -2221,10 +2224,12 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 	struct spi_device *spi = priv->spi;
 	int ret;
 
-	priv->irq_state = IRQ_STATE_RUNNING;
+	priv->stats.irq_calls++;
+	priv->stats.irq_state = IRQ_STATE_RUNNING;
 
 	while (!priv->force_quit) {
-		priv->irq_loops++;
+		/* count irq loops */
+		priv->stats.irq_loops++;
 
 		/* read interrupt status flags */
 		ret = mcp2517fd_cmd_readn(spi, CAN_INT,
@@ -2245,7 +2250,7 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 			return ret;
 	}
 
-	priv->irq_state = IRQ_STATE_HANDLED;
+	priv->stats.irq_state = IRQ_STATE_HANDLED;
 
 	return IRQ_HANDLED;
 }
@@ -2949,8 +2954,10 @@ static int mcp2517fd_open(struct net_device *net)
 
 	priv->force_quit = 0;
 
-	priv->irq_state = 0;
-	priv->irq_loops = 0;
+	priv->stats.irq_state = 0;
+	priv->stats.irq_calls = 0;
+	priv->stats.irq_loops = 0;
+
 	priv->force_quit = 0;
 	ret = request_threaded_irq(spi->irq, NULL,
 				   mcp2517fd_can_ist,
@@ -3088,8 +3095,9 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->spi_speed_hz);
 
 	/* add irq state info */
-	debugfs_create_u64("irq_loops", 0444, root, &priv->irq_loops);
-	debugfs_create_u32("irq_state", 0444, root, &priv->irq_state);
+	debugfs_create_u64("irq_calls", 0444, root, &priv->stats.irq_calls);
+	debugfs_create_u64("irq_loops", 0444, root, &priv->stats.irq_loops);
+	debugfs_create_u32("irq_state", 0444, root, &priv->stats.irq_state);
 
 	/* export the status structure */
 	debugfs_create_x32("intf", 0444, status, &priv->status.intf);
