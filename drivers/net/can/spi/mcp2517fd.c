@@ -2612,7 +2612,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 			return ret;
 	}
 
-	/* decide on TEF, tx and rx FIFOS */
+	/* decide on TEF, tx and rx FIFO count */
 	switch (net->mtu) {
 	case CAN_MTU:
 		/* note: if we have INT1 connected to a GPIO
@@ -2625,12 +2625,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		priv->fifos.payload_mode = CAN_TXQCON_PLSIZE_8;
 
 		/* 7 tx fifos starting at fifo 1 */
-		priv->fifos.tx_fifo_start = 1;
 		priv->fifos.tx_fifos = 7;
 
 		/* 24 rx fifos starting at fifo 8 with 2 buffers/fifo */
-		priv->fifos.rx_fifo_start =
-			priv->fifos.tx_fifo_start + priv->fifos.tx_fifos;
 		priv->fifos.rx_fifo_depth = 1;
 
 		break;
@@ -2676,10 +2673,12 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		sizeof(struct mcp2517fd_obj_tx) +
 		priv->fifos.payload_size
 		);
+
 	/* check that we are not exceeding memory limits with 1 RX buffer */
 	if (tx_memory_used + (sizeof(struct mcp2517fd_obj_rx) +
 		   priv->fifos.payload_size) > MCP2517FD_BUFFER_TXRX_SIZE) {
-		dev_err(&spi->dev, "Configured %i tx-fifos exceeds available memory already\n",
+		dev_err(&spi->dev,
+			"Configured %i tx-fifos exceeds available memory already\n",
 			priv->fifos.tx_fifos);
 		return -EINVAL;
 	}
@@ -2697,6 +2696,11 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	 */
 	if (priv->fifos.rx_fifo_start + priv->fifos.rx_fifos > 32)
 		priv->fifos.rx_fifos = 32 - priv->fifos.rx_fifo_start;
+
+	/* calculate with fifos go where - Policy: RX FIFOs first */
+	priv->fifos.rx_fifo_start = 1;
+	priv->fifos.tx_fifo_start =
+		priv->fifos.rx_fifo_start + priv->fifos.rx_fifos;
 
 	/* set up TEF SIZE to the number of tx_fifos and IRQ */
 	priv->regs.tefcon = CAN_TEFCON_FRESET |
