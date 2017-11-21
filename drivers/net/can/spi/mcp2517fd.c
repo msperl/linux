@@ -2693,9 +2693,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		priv->fifos.rx_fifos = 32 - priv->fifos.tx_fifos;
 
 	/* calculate rx/tx fifo start */
-	priv->fifos.tx_fifo_start = 1;
-	priv->fifos.rx_fifo_start =
-		priv->fifos.tx_fifo_start + priv->fifos.tx_fifos;
+	priv->fifos.rx_fifo_start = 1;
+	priv->fifos.tx_fifo_start =
+		priv->fifos.rx_fifo_start + priv->fifos.rx_fifos;
 
 	/* set up TEF SIZE to the number of tx_fifos and IRQ */
 	priv->regs.tefcon = CAN_TEFCON_FRESET |
