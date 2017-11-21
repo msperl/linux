@@ -1210,7 +1210,7 @@ static int mcp2517fd_transmit_message_common(
 	/* fill in details */
 	memcpy(txm->fill_obj, obj, sizeof(*obj));
 	memset(txm->fill_data, 0, sizeof(*txm->fill_data));
-	memcpy(txm->fill_data + sizeof(*obj), data, len);
+	memcpy(txm->fill_data, data, len);
 
 	/* transfers to FIFO RAM has to be multiple of 4 */
 	txm->fill_xfer.len = 2 + sizeof(*obj) + ALIGN(len, 4);
