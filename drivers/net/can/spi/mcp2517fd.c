@@ -1208,12 +1208,13 @@ static int mcp2517fd_transmit_message_common(
 	mcp2517fd_obj_to_le(&obj->header);
 
 	/* fill in details */
-	memcpy(txm->fill_obj, obj, sizeof(*obj));
-	memset(txm->fill_data, 0, sizeof(*txm->fill_data));
+	memcpy(txm->fill_obj, obj, sizeof(struct mcp2517fd_obj_tx));
+	memset(txm->fill_data, 0, priv->fifos.payload_size);
 	memcpy(txm->fill_data, data, len);
 
 	/* transfers to FIFO RAM has to be multiple of 4 */
-	txm->fill_xfer.len = 2 + sizeof(*obj) + ALIGN(len, 4);
+	txm->fill_xfer.len =
+		2 + sizeof(struct mcp2517fd_obj_tx) + ALIGN(len, 4);
 
 	/* and transmit asyncroniously */
 	ret = spi_async(spi, &txm->msg);
