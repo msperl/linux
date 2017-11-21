@@ -1722,8 +1722,7 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	int fifo_header_size = sizeof(struct mcp2517fd_obj_rx);
-	int fifo_max_payload_size =
-		((priv->can.ctrlmode & CAN_CTRLMODE_FD) ? 64 : 8);
+	int fifo_max_payload_size = priv->fifos.payload_size;
 	int fifo_max_size = fifo_header_size + fifo_max_payload_size;
 	u32 mask = priv->status.rxif;
 	u32 rx_fifo_end = priv->fifos.rx_fifo_start +
@@ -1745,7 +1744,8 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 
 			/* now we got start and end, so read the range */
 			ret = mcp2517fd_cmd_readn(
-				spi, FIFO_DATA(priv->fifos.fifo_address[i]),
+				spi,
+				FIFO_DATA(priv->fifos.fifo_address[i]),
 				priv->fifos.fifo_data +
 				priv->fifos.fifo_address[i],
 				(j - i) * fifo_max_size,
@@ -1766,9 +1766,9 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 			/* preprocess data */
 			for (; i < j ; i++) {
 				/* store the fifo to process */
-				rx = (struct mcp2517fd_obj_rx *)
+				rx = (struct mcp2517fd_obj_rx *)(
 					priv->fifos.fifo_data +
-					priv->fifos.fifo_address[i];
+					priv->fifos.fifo_address[i]);
 				/* process fifo stats */
 				mcp2517fd_transform_rx(spi, rx);
 				/* increment usage */
