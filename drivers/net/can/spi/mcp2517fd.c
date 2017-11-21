@@ -2690,7 +2690,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	 * so modify rx accordingly
 	 */
 	if (priv->fifos.tx_fifos + priv->fifos.rx_fifos > 31)
-		priv->fifos.rx_fifos = 32 - priv->fifos.tx_fifos;
+		priv->fifos.rx_fifos = 31 - priv->fifos.tx_fifos;
 
 	/* calculate rx/tx fifo start */
 	priv->fifos.rx_fifo_start = 1;
