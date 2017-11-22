@@ -37,7 +37,104 @@
 
 #define DEVICE_NAME "mcp2517fd"
 
-/* Register definitions */
+/* device description and rational:
+ *
+ * the mcp2517fd is a CanFD controller that also supports can2.0 only
+ * modes.
+ * It is connected via spi to the host and requires at minimum a single
+ * irq line in addition to the SPI lines - it is not mentioned explicitly
+ * in the documentation but in principle SPI 3-wire should be possible.
+ *
+ * The clock connected is typically 4MHz, 20MHz or 40MHz.
+ * For the 4MHz clock the controller contains 10x PLL circuitry.
+ *
+ * The controller itself has 2KB or ECC-SRAM for data.
+ * It also has 32 FIFOs (of up to 32 CAN-frames).
+ * There are 4 Fifo types which can get configured:
+ * * TEF - Transmission Event Fifo - which consumes FIFO 0
+ *   even if it is not configured
+ * * Tansmission Queue - for up to 32 Frames.
+ *   this queue reorders CAN frames to get transmitted following the
+ *   typical CAN dominant/recessive rules on the can bus itself.
+ *   This FIFO is optional.
+ * * TX FIFO: generic TX fifos that can contain arbitrary data
+ *   and which come with a configurable priority for transmission
+ *   It is also possible to have the Controller automatically trigger
+ *   a transfer when a Filter Rule for a RTR frame matches.
+ *   Each of these fifos in principle can get configured for distinct
+ *   dlc sizes (8 thru 64 bytes)
+ * * RX FIFO: generic RX fifo which is filled via filter-rules.
+ *   Each of these fifos in principle can get configured for distinct
+ *   dlc sizes (8 thru 64 bytes)
+ *   Unfortunately there is no filter rule that would allow triggering
+ *   on different frame sizes, so for all practical purposes the
+ *   RX fifos have to be of the same size (unless one wants to experience
+ *   lost data).
+ * When a Can Frame is transmitted fromthe TX Queue or an individual
+ * TX FIFO then a small TEF Frame can get added to the TEF FIFO queue
+ * to log the Transmission of the frame - this includes ID, Flags
+ * (including a custom identifier/index) .
+ *
+ * The controller provides an optional free running counter with a divider
+ * for timestamping of RX frames as well as for TEF entries.
+ *
+ * Driver Implementation details and rational:
+ * * The whole driver has been designed to give best performance
+ *   and as little packet loss as possible with 1MHZ Can frames with DLC=0
+ *   on small/slow devices like the Raspberry Pi 1
+ * * This means that some optimizations for full duplex communication
+ *   have been implemented to avoid CPU introduced latencies
+ *   (especially for spi_write_then_read cases) - this only applies to
+ *   4 wire SPI busses.
+ * * Due to the fact that the TXQ does reorder Can-Frames we do not make
+ *   use of it to avoid unexpected behaviour (say when running a
+ *   firmware upgrade via Can)
+ * * this means we use individual TX-fifos with a given priority and
+ *   we have to wait until all the TX fifos have been transmitted before
+ *   we can restart the networking queue to avoid reordering the frames on
+ *   the Can bus itself.
+ *   Still we can transmit a transmit only Duty-cycle of 66% to 90% on the
+ *   Can bus (at 1MHz).
+ *   The scaling factors here are:
+ *   * Can bus speed - lower Speeds increase Duty-cycle
+ *   * SPI Clock Rate - higher speeds increase duty-cycle
+ *   * CPU speed + SPI implementation - reduces latencies between transfers
+ * * There is a module parameter that allows the modification of the
+ *   number of tx_fifos, which is by default 7.
+ * * The driver offers some module parameters that allow to control the use
+ *   of some optimizations (prefer reading more data than necessary instead
+ *   of multiple SPI transfers - the idea here is that this way we may
+ *   allow the SPI-controller to use DMA instead of programmed IO to
+ *   limit latencies/number of interrupts)
+ *   When we have to read multiple RX frames in CanFD mode:
+ *   * we allow reading all 64 bytes of payload even if DLC <=8
+ *     this mode is used in Can2.0 only mode by default and can not get
+ *     disabled (SRAM Reads have to be a multiple of 4 bytes anyway)
+ *   * Releasing/freeing the RX queue requires writing of 1 byte per fifo.
+ *     unfortunately these 32-bit registers are not ajacent to each other,
+ *     so that for 2 consecutive RX Frames instead of writing 1 byte per
+ *     fifo (with protocol overhead of 2 bytes - so a total of 6 bytes in
+ *     2 transfers) we transmit 13 bytes (with a protocol overhead of 2 -
+ *     so a total of 15 bytes)
+ *     This optimization is only enabled by a module parameter.
+ * * we use TEF + time stamping to record the transmitted frames
+ *   including their timestamp - we use this to order TX and RX frames
+ *   when submitting them to the network stack.
+ * * due to the inability to "filter" based on DLC sizes we have to use
+ *   a common FIFO size. This is 8 bytes for Can2.0 and 64 bytes for CanFD.
+ * * the driver tries to detect the Controller only by reading registers,
+ *   but there are circumstances (e.g. after a crashed driver) where we
+ *   have to "blindly" configure the clock rate to get the controller to
+ *   respond correctly.
+ * * There is one situation where the controller will require a full POR
+ *   (total power off) to recover from a bad Clock configuration.
+ *   This happens when the wrong clock is configured in the device tree
+ *   (say 4MHz are configured, while 20 or 40MHz are used)
+ *   in such a situation the driver tries to enable the PLL, which will
+ *   never syncronize and the controller becomes unresponsive to further
+ *   spi requests until a POR.
+ */
+
 #define MCP2517FD_OST_DELAY_MS		3
 #define MCP2517FD_MIN_CLOCK_FREQUENCY	1000000
 #define MCP2517FD_MAX_CLOCK_FREQUENCY	40000000
