@@ -1378,6 +1378,12 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 	if (can_dropped_invalid_skb(net, skb))
 		return NETDEV_TX_OK;
 
+	if (priv->can.state == CAN_STATE_BUS_OFF) {
+		priv->tx_queue_status = 0;
+		netif_stop_queue(priv->net);
+		return NETDEV_TX_BUSY;
+	}
+
 	/* get effective mask */
 	pending_mask = priv->fifos.tx_pending_mask |
 		priv->fifos.tx_submitted_mask;
@@ -2156,6 +2162,53 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	return 0;
 }
 
+static int mcp2517fd_hw_wake(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 waitfor = MCP2517FD_OSC_OSCRDY;
+	u32 mask = waitfor | MCP2517FD_OSC_OSCDIS;
+	unsigned long timeout;
+	int ret;
+
+	/* write clock */
+	ret = mcp2517fd_cmd_write(
+		spi, MCP2517FD_OSC,priv->regs.osc,
+		priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+
+	/* wait for synced pll/osc/sclk */
+	timeout = jiffies + MCP2517FD_OSC_POLLING_JIFFIES;
+	while (time_before_eq(jiffies, timeout)) {
+		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+					 &priv->regs.osc,
+					 priv->spi_setup_speed_hz);
+		if (ret)
+			return ret;
+		if ((priv->regs.osc & mask) == waitfor)
+			return 0;
+	}
+
+	dev_err(&spi->dev,
+		"Clock did not enable within the timeout period\n");
+
+	return -ETIMEDOUT;
+}
+
+static void mcp2517fd_hw_sleep(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/* set mode to sleep */
+	priv->active_can_mode = CAN_CON_MODE_SLEEP;
+	priv->regs.con = (priv->regs.con & ~CAN_CON_REQOP_MASK) |
+		(priv->active_can_mode << CAN_CON_REQOP_SHIFT);
+
+	mcp2517fd_cmd_write(spi, CAN_CON,
+			    priv->regs.con,
+			    priv->spi_setup_speed_hz);
+}
+
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -2293,6 +2346,17 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	if (priv->can_err_id)
 		mcp2517fd_error_skb(priv->net);
 
+	/* handle BUS OFF */
+	if (priv->can.state == CAN_STATE_BUS_OFF) {
+		if (priv->can.restart_ms == 0) {
+			netif_stop_queue(priv->net);
+			priv->force_quit = 1;
+			priv->can.can_stats.bus_off++;
+			can_bus_off(priv->net);
+			mcp2517fd_hw_sleep(spi);
+		}
+	}
+
 	/* clear int flags */
 	if (priv->int_clear_mask) {
 		ret = mcp2517fd_cmd_write_mask(spi,
@@ -2364,11 +2428,6 @@ static int mcp2517fd_get_berr_counter(const struct net_device *net,
 		CAN_TREC_REC_SHIFT;
 
 	return 0;
-}
-
-static void mcp2517fd_hw_sleep(struct spi_device *spi)
-{
-	/* TODO */
 }
 
 static int mcp2517fd_power_enable(struct regulator *reg, int enable)
@@ -2771,7 +2830,8 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	/* check that we are not exceeding memory limits with 1 RX buffer */
 	if (tx_memory_used + (sizeof(struct mcp2517fd_obj_rx) +
 		   priv->fifos.payload_size) > MCP2517FD_BUFFER_TXRX_SIZE) {
-		dev_err(&spi->dev, "Configured %i tx-fifos exceeds available memory already\n",
+		dev_err(&spi->dev,
+		"Configured %i tx-fifos exceeds available memory already\n",
 			priv->fifos.tx_fifos);
 		return -EINVAL;
 	}
@@ -3068,8 +3128,16 @@ static int mcp2517fd_open(struct net_device *net)
 		goto open_unlock;
 	}
 
+	/* wake from sleep by reconfiguring the oscillator */
+	ret = mcp2517fd_hw_wake(spi);
+	if (ret) {
+		mcp2517fd_open_clean(net);
+		goto open_unlock;
+	}
+
 	ret = mcp2517fd_hw_probe(spi);
 	if (ret) {
+		dev_err(&spi->dev, "HW Probe failed...\n");
 		mcp2517fd_open_clean(net);
 		goto open_unlock;
 	}
@@ -3079,8 +3147,6 @@ static int mcp2517fd_open(struct net_device *net)
 		mcp2517fd_open_clean(net);
 		goto open_unlock;
 	}
-
-	mcp2517fd_do_set_nominal_bittiming(net);
 
 	ret = mcp2517fd_set_normal_mode(spi);
 	if (ret) {
