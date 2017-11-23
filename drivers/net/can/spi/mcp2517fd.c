@@ -2197,7 +2197,11 @@ static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
 {
-	/* TODO */
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/* disable interrupts */
+	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
+
 }
 
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
@@ -2501,6 +2505,7 @@ static void mcp2517fd_open_clean(struct net_device *net)
 	struct mcp2517fd_priv *priv = netdev_priv(net);
 	struct spi_device *spi = priv->spi;
 
+	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
 	free_irq(spi->irq, priv);
 	mcp2517fd_hw_sleep(spi);
 	mcp2517fd_power_enable(priv->transceiver, 0);
@@ -3057,13 +3062,7 @@ static int mcp2517fd_setup(struct net_device *net,
 		priv->regs.con |= CAN_CON_RTXAT;
 
 	/* setup fifos - this also puts the system into sleep mode */
-	ret = mcp2517fd_setup_fifo(net, priv, spi);
-	if (ret)
-		return ret;
-
-	/* interrupt configuration */
-	return mcp2517fd_enable_interrupts(spi,
-					   priv->spi_setup_speed_hz);
+	return mcp2517fd_setup_fifo(net, priv, spi);
 }
 
 static int mcp2517fd_open(struct net_device *net)
@@ -3119,6 +3118,12 @@ static int mcp2517fd_open(struct net_device *net)
 		mcp2517fd_open_clean(net);
 		goto open_unlock;
 	}
+
+	/* only now enable the interrupt on the controller */
+	ret =  mcp2517fd_enable_interrupts(spi,
+					   priv->spi_setup_speed_hz);
+	if (ret)
+		goto open_unlock;
 
 	can_led_event(net, CAN_LED_EVENT_OPEN);
 
