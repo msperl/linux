@@ -63,9 +63,9 @@
                 interrupts = <16 0x8>;
                 clocks = <&can0_osc>;
                 microchip,clock_div = <1>;
-                microchip,clock_out_div = <4>;
-                microchip,gpio0_mode = <1>;
-                microchip,gpio1_mode = <1>;
+                microchip,clock_out_div = <10>;
+                microchip,gpio0_mode = <0>; /* TX-interrupt output */
+                microchip,gpio1_mode = <0>; /* RX-interrupt output */
             };
         };
     };
@@ -73,5 +73,9 @@
         oscillator = <&can0_osc>,"clock-frequency:0";
         spimaxfrequency = <&can0>,"spi-max-frequency:0";
         interrupt = <&can0_pins>,"brcm,pins:0",<&can0>,"interrupts:0";
+	clockdiv = <&can0>,"microchip,clock_div:0";
+	clockoutdiv = <&can0>,"microchip,clock_out_div:0";
+	gpio0_mode = <&can0>,"microchip,gpio0_mode:0";
+	gpio1_mode = <&can0>,"microchip,gpio1_mode:0";
     };
 };
