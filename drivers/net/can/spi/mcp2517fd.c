@@ -2780,7 +2780,8 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	/* check that we are not exceeding memory limits with 1 RX buffer */
 	if (tx_memory_used + (sizeof(struct mcp2517fd_obj_rx) +
 		   priv->fifos.payload_size) > MCP2517FD_BUFFER_TXRX_SIZE) {
-		dev_err(&spi->dev, "Configured %i tx-fifos exceeds available memory already\n",
+		dev_err(&spi->dev,
+			"Configured %i tx-fifos exceeds available memory already\n",
 			priv->fifos.tx_fifos);
 		return -EINVAL;
 	}
