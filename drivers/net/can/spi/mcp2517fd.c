@@ -2163,7 +2163,36 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	return 0;
 }
 
+static int mcp2517fd_disable_interrupts(struct spi_device *spi,
+					u32 speed_hz)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
+	priv->status.intf = 0;
+	return mcp2517fd_cmd_write(spi, CAN_INT, 0, speed_hz);
+}
+
+static int mcp2517fd_enable_interrupts(struct spi_device *spi,
+				       u32 speed_hz)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	priv->status.intf = CAN_INT_TEFIE |
+		CAN_INT_RXIE |
+		CAN_INT_MODIE |
+		CAN_INT_SERRIE |
+		CAN_INT_IVMIE |
+		CAN_INT_CERRIE |
+		CAN_INT_ECCIE;
+	return mcp2517fd_cmd_write(spi, CAN_INT,
+				   priv->status.intf,
+				   speed_hz);
+}
+
+static void mcp2517fd_hw_sleep(struct spi_device *spi)
+{
+	/* TODO */
+}
 
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
@@ -2375,11 +2404,6 @@ static int mcp2517fd_get_berr_counter(const struct net_device *net,
 	return 0;
 }
 
-static void mcp2517fd_hw_sleep(struct spi_device *spi)
-{
-	/* TODO */
-}
-
 static int mcp2517fd_power_enable(struct regulator *reg, int enable)
 {
 	if (IS_ERR_OR_NULL(reg))
@@ -2464,32 +2488,6 @@ static void mcp2517fd_open_clean(struct net_device *net)
 	mcp2517fd_hw_sleep(spi);
 	mcp2517fd_power_enable(priv->transceiver, 0);
 	close_candev(net);
-}
-
-static int mcp2517fd_disable_interrupts(struct spi_device *spi,
-					u32 speed_hz)
-{
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-
-	priv->status.intf = 0;
-	return mcp2517fd_cmd_write(spi, CAN_INT, 0, speed_hz);
-}
-
-static int mcp2517fd_enable_interrupts(struct spi_device *spi,
-				       u32 speed_hz)
-{
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-
-	priv->status.intf = CAN_INT_TEFIE |
-		CAN_INT_RXIE |
-		CAN_INT_MODIE |
-		CAN_INT_SERRIE |
-		CAN_INT_IVMIE |
-		CAN_INT_CERRIE |
-		CAN_INT_ECCIE;
-	return mcp2517fd_cmd_write(spi, CAN_INT,
-				   priv->status.intf,
-				   speed_hz);
 }
 
 static int mcp2517fd_hw_probe(struct spi_device *spi)
