@@ -3094,6 +3094,7 @@ static int mcp2517fd_open(struct net_device *net)
 	}
 
 	mcp2517fd_do_set_nominal_bittiming(net);
+	mcp2517fd_do_set_data_bittiming(net);
 
 	ret = mcp2517fd_set_normal_mode(spi);
 	if (ret) {
