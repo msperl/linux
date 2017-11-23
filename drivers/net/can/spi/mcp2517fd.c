@@ -908,6 +908,8 @@ struct mcp2517fd_priv {
 		u32 tdc;
 		u32 tscon;
 		u32 tefcon;
+		u32 nbtcfg;
+		u32 dbtcfg;
 	} regs;
 
 	/* interrupt handler signaling */
@@ -2415,12 +2417,13 @@ static int mcp2517fd_do_set_nominal_bittiming(struct net_device *net)
 	int tseg2 = pseg2;
 
 	/* calculate nominal bit timing */
-	u32 val = ((sjw - 1) << CAN_NBTCFG_SJW_SHIFT)
-		| ((tseg2 - 1) << CAN_NBTCFG_TSEG2_SHIFT)
-		| ((tseg1 - 1) << CAN_NBTCFG_TSEG1_SHIFT)
-		| ((brp - 1) << CAN_NBTCFG_BRP_SHIFT);
+	priv->regs.nbtcfg = ((sjw - 1) << CAN_NBTCFG_SJW_SHIFT) |
+		((tseg2 - 1) << CAN_NBTCFG_TSEG2_SHIFT) |
+		((tseg1 - 1) << CAN_NBTCFG_TSEG1_SHIFT) |
+		((brp - 1) << CAN_NBTCFG_BRP_SHIFT);
 
-	return mcp2517fd_cmd_write(spi, CAN_NBTCFG, val,
+	return mcp2517fd_cmd_write(spi, CAN_NBTCFG,
+				   priv->regs.nbtcfg,
 				   priv->spi_setup_speed_hz);
 }
 
@@ -2440,12 +2443,13 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 	int tseg2 = pseg2;
 
 	/* calculate nominal bit timing */
-	u32 val = ((sjw - 1) << CAN_DBTCFG_SJW_SHIFT)
-		| ((tseg2 - 1) << CAN_DBTCFG_TSEG2_SHIFT)
-		| ((tseg1 - 1) << CAN_DBTCFG_TSEG1_SHIFT)
-		| ((brp - 1) << CAN_DBTCFG_BRP_SHIFT);
+	priv->regs.dbtcfg = ((sjw - 1) << CAN_DBTCFG_SJW_SHIFT) |
+		((tseg2 - 1) << CAN_DBTCFG_TSEG2_SHIFT) |
+		((tseg1 - 1) << CAN_DBTCFG_TSEG1_SHIFT) |
+		((brp - 1) << CAN_DBTCFG_BRP_SHIFT);
 
-	return mcp2517fd_cmd_write(spi, CAN_DBTCFG, val,
+	return mcp2517fd_cmd_write(spi, CAN_DBTCFG,
+				   priv->regs.dbtcfg,
 				   priv->spi_setup_speed_hz);
 }
 
@@ -3223,6 +3227,8 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_x32("iocon", 0444, regs, &priv->regs.iocon);
 	debugfs_create_x32("tdc", 0444, regs, &priv->regs.tdc);
 	debugfs_create_x32("tscon", 0444, regs, &priv->regs.tscon);
+	debugfs_create_x32("nbtcfg", 0444, regs, &priv->regs.nbtcfg);
+	debugfs_create_x32("dbtcfg", 0444, regs, &priv->regs.dbtcfg);
 
 	/* information on fifos */
 	debugfs_create_u32("fifo_start", 0444, rx,
