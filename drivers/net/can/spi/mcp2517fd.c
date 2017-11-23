@@ -2195,6 +2195,40 @@ static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 				   speed_hz);
 }
 
+static int mcp2517fd_hw_wake(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 waitfor = MCP2517FD_OSC_OSCRDY;
+	u32 mask = waitfor | MCP2517FD_OSC_OSCDIS;
+	unsigned long timeout;
+	int ret;
+
+	/* write clock */
+	ret = mcp2517fd_cmd_write(
+		spi, MCP2517FD_OSC,priv->regs.osc,
+		priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+
+	/* wait for synced pll/osc/sclk */
+	timeout = jiffies + MCP2517FD_OSC_POLLING_JIFFIES;
+	while (time_before_eq(jiffies, timeout)) {
+		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+					 &priv->regs.osc,
+					 priv->spi_setup_speed_hz);
+		if (ret)
+			return ret;
+		if ((priv->regs.osc & mask) == waitfor) {
+			priv->active_can_mode = CAN_CON_MODE_CONFIG;
+			return 0;
+		}
+	}
+
+	dev_err(&spi->dev,
+		"Clock did not enable within the timeout period\n");
+	return -ETIMEDOUT;
+}
+
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -2202,6 +2236,13 @@ static void mcp2517fd_hw_sleep(struct spi_device *spi)
 	/* disable interrupts */
 	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
 
+	priv->active_can_mode = CAN_CON_MODE_SLEEP;
+	priv->regs.con = (priv->regs.con & ~CAN_CON_REQOP_MASK) |
+		(priv->active_can_mode << CAN_CON_REQOP_SHIFT);
+	return;
+	mcp2517fd_cmd_write(spi, CAN_CON,
+			    priv->regs.con,
+			    priv->spi_setup_speed_hz);
 }
 
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
@@ -2538,14 +2579,15 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	case MCP2517FD_OSC_OSCRDY: /* either the clock is ready */
 		break;
 	case MCP2517FD_OSC_OSCDIS: /* or the clock is disabled */
-		/* setup clock with defaults - only CLOCKDIV 10 */
-		ret = mcp2517fd_cmd_write(
-			spi, MCP2517FD_OSC,
-			MCP2517FD_OSC_CLKODIV_10
-			<< MCP2517FD_OSC_CLKODIV_SHIFT,
-			priv->spi_setup_speed_hz);
+		/* wakeup sleeping system */
+		ret = mcp2517fd_hw_wake(spi);
 		if (ret)
 			return ret;
+		/* send a reset, hoping we are now in Config mode */
+               mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
+
+               /* Wait for oscillator startup again */
+               mdelay(MCP2517FD_OST_DELAY_MS);
 		break;
 	default:
 		/* otherwise there is no valid device (or in strange state)
@@ -3098,8 +3140,16 @@ static int mcp2517fd_open(struct net_device *net)
 		goto open_unlock;
 	}
 
+	/* wake from sleep if necessary */
+	ret = mcp2517fd_hw_wake(spi);
+	if (ret) {
+		mcp2517fd_open_clean(net);
+		goto open_unlock;
+	}
+
 	ret = mcp2517fd_hw_probe(spi);
 	if (ret) {
+		dev_err(&spi->dev, "HW Probe failed...\n");
 		mcp2517fd_open_clean(net);
 		goto open_unlock;
 	}
