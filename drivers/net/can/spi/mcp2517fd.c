@@ -959,6 +959,11 @@ unsigned int tx_fifos;
 module_param(tx_fifos, uint, S_IRUGO | S_IWUSR | S_IWGRP);
 MODULE_PARM_DESC(tx_fifos, "Number of tx-fifos to configure\n");
 
+unsigned int bw_sharing_log2bits;
+module_param(bw_sharing_log2bits, uint, S_IRUGO | S_IWUSR | S_IWGRP);
+MODULE_PARM_DESC(bw_sharing_log2bits,
+		 "Delay between 2 transmissions in number of arbitration bit times\n");
+
 /* spi sync helper */
 
 /* wrapper arround spi_sync, that sets speed_hz */
@@ -3018,6 +3023,10 @@ static int mcp2517fd_setup(struct net_device *net,
 
 	/* setup value of con_register */
 	priv->regs.con = CAN_CON_STEF /* enable TEF */;
+	/* transmissin bandwidth sharing bits */
+	if (bw_sharing_log2bits < 12)
+		bw_sharing_log2bits = 12;
+	priv->regs.con |= bw_sharing_log2bits << CAN_CON_TXBWS_SHIFT;
 	/* non iso FD mode */
 	if (!(priv->can.ctrlmode & CAN_CTRLMODE_FD_NON_ISO))
 		priv->regs.con |= CAN_CON_ISOCRCEN;
@@ -3287,6 +3296,7 @@ int mcp2517fd_of_parse(struct mcp2517fd_priv *priv)
 			return -EINVAL;
 		}
 	}
+
 	ret = of_property_read_u32_index(np, "microchip,clock_out_div",
 					 0, &val);
 	if (!ret) {
