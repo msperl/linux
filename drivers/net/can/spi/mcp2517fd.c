@@ -2203,6 +2203,10 @@ static int mcp2517fd_hw_wake(struct spi_device *spi)
 	unsigned long timeout;
 	int ret;
 
+	if (priv->active_can_mode != CAN_CON_MODE_SLEEP) {
+		return 0;
+	}
+
 	/* write clock */
 	ret = mcp2517fd_cmd_write(
 		spi, MCP2517FD_OSC,priv->regs.osc,
@@ -2239,7 +2243,6 @@ static void mcp2517fd_hw_sleep(struct spi_device *spi)
 	priv->active_can_mode = CAN_CON_MODE_SLEEP;
 	priv->regs.con = (priv->regs.con & ~CAN_CON_REQOP_MASK) |
 		(priv->active_can_mode << CAN_CON_REQOP_SHIFT);
-	return;
 	mcp2517fd_cmd_write(spi, CAN_CON,
 			    priv->regs.con,
 			    priv->spi_setup_speed_hz);
@@ -3543,6 +3546,11 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	priv->config.clock_div2 = false;
 	/* clock output is divided by 10 */
 	priv->config.clock_odiv = 10;
+
+	/* as a first guess we assume we are in CAN_CON_MODE_SLEEP
+	 * this is how we leave the controller when removing ourselves
+	 */
+	priv->active_can_mode = CAN_CON_MODE_SLEEP;
 
 	/* if we have a clock that is smaller then 4MHz, then enable the pll */
 	priv->config.clock_pll =
