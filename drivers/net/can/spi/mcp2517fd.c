@@ -1385,6 +1385,12 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 	if (can_dropped_invalid_skb(net, skb))
 		return NETDEV_TX_OK;
 
+	if (priv->can.state == CAN_STATE_BUS_OFF) {
+		priv->tx_queue_status = 0;
+		netif_stop_queue(priv->net);
+		return NETDEV_TX_BUSY;
+	}
+
 	/* get effective mask */
 	pending_mask = priv->fifos.tx_pending_mask |
 		priv->fifos.tx_submitted_mask;
@@ -2330,6 +2336,17 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* and send error packet */
 	if (priv->can_err_id)
 		mcp2517fd_error_skb(priv->net);
+
+	/* handle BUS OFF */
+	if (priv->can.state == CAN_STATE_BUS_OFF) {
+		if (priv->can.restart_ms == 0) {
+			netif_stop_queue(priv->net);
+			priv->force_quit = 1;
+			priv->can.can_stats.bus_off++;
+			can_bus_off(priv->net);
+			mcp2517fd_hw_sleep(spi);
+		}
+	}
 
 	/* clear int flags */
 	if (priv->int_clear_mask) {
