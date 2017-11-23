@@ -2163,6 +2163,8 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	return 0;
 }
 
+
+
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -2481,10 +2483,10 @@ static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 	priv->status.intf = CAN_INT_TEFIE |
 		CAN_INT_RXIE |
 		CAN_INT_MODIE |
-		CAN_INT_SERRIF |
-		CAN_INT_IVMIF |
-		CAN_INT_CERRIF |
-		CAN_INT_ECCIF;
+		CAN_INT_SERRIE |
+		CAN_INT_IVMIE |
+		CAN_INT_CERRIE |
+		CAN_INT_ECCIE;
 	return mcp2517fd_cmd_write(spi, CAN_INT,
 				   priv->status.intf,
 				   speed_hz);
