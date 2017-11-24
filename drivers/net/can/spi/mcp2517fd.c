@@ -3139,50 +3139,48 @@ static int mcp2517fd_open(struct net_device *net)
 			spi->irq, ret);
 		mcp2517fd_power_enable(priv->transceiver, 0);
 		close_candev(net);
-		goto open_unlock;
+		return ret;
 	}
 
 	/* wake from sleep if necessary */
 	ret = mcp2517fd_hw_wake(spi);
-	if (ret) {
-		mcp2517fd_open_clean(net);
-		goto open_unlock;
-	}
+	if (ret)
+		goto open_clean;
 
 	ret = mcp2517fd_hw_probe(spi);
 	if (ret) {
-		dev_err(&spi->dev, "HW Probe failed...\n");
-		mcp2517fd_open_clean(net);
-		goto open_unlock;
+		dev_err(&spi->dev,
+			"HW Probe failed, but was working earlier!\n");
+		goto open_clean;
 	}
 
 	ret = mcp2517fd_setup(net, priv, spi);
-	if (ret) {
-		mcp2517fd_open_clean(net);
-		goto open_unlock;
-	}
+	if (ret)
+		goto open_clean;
 
 	mcp2517fd_do_set_nominal_bittiming(net);
 	mcp2517fd_do_set_data_bittiming(net);
 
 	ret = mcp2517fd_set_normal_mode(spi);
-	if (ret) {
-		mcp2517fd_open_clean(net);
-		goto open_unlock;
-	}
+	if (ret)
+		goto open_clean;
 
 	/* only now enable the interrupt on the controller */
 	ret =  mcp2517fd_enable_interrupts(spi,
 					   priv->spi_setup_speed_hz);
 	if (ret)
-		goto open_unlock;
+		goto open_clean;
 
 	can_led_event(net, CAN_LED_EVENT_OPEN);
 
 	priv->tx_queue_status = 1;
 	netif_wake_queue(net);
 
-open_unlock:
+	return 0;
+
+open_clean:
+	mcp2517fd_open_clean(net);
+
 	return ret;
 }
 
