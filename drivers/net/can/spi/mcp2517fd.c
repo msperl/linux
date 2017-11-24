@@ -131,7 +131,7 @@
  *   This happens when the wrong clock is configured in the device tree
  *   (say 4MHz are configured, while 20 or 40MHz are used)
  *   in such a situation the driver tries to enable the PLL, which will
- *   never syncronize and the controller becomes unresponsive to further
+ *   never synchronize and the controller becomes unresponsive to further
  *   spi requests until a POR.
  */
 
@@ -2203,13 +2203,12 @@ static int mcp2517fd_hw_wake(struct spi_device *spi)
 	unsigned long timeout;
 	int ret;
 
-	if (priv->active_can_mode != CAN_CON_MODE_SLEEP) {
+	if (priv->active_can_mode != CAN_CON_MODE_SLEEP)
 		return 0;
-	}
 
 	/* write clock */
 	ret = mcp2517fd_cmd_write(
-		spi, MCP2517FD_OSC,priv->regs.osc,
+		spi, MCP2517FD_OSC, priv->regs.osc,
 		priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
@@ -2587,10 +2586,10 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 		if (ret)
 			return ret;
 		/* send a reset, hoping we are now in Config mode */
-               mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
+		mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
 
-               /* Wait for oscillator startup again */
-               mdelay(MCP2517FD_OST_DELAY_MS);
+		/* Wait for oscillator startup again */
+		mdelay(MCP2517FD_OST_DELAY_MS);
 		break;
 	default:
 		/* otherwise there is no valid device (or in strange state)
