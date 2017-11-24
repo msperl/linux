@@ -2543,18 +2543,6 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 				   priv->spi_setup_speed_hz);
 }
 
-static void mcp2517fd_open_clean(struct net_device *net)
-{
-	struct mcp2517fd_priv *priv = netdev_priv(net);
-	struct spi_device *spi = priv->spi;
-
-	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
-	free_irq(spi->irq, priv);
-	mcp2517fd_hw_sleep(spi);
-	mcp2517fd_power_enable(priv->transceiver, 0);
-	close_candev(net);
-}
-
 static int mcp2517fd_hw_probe(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -3179,7 +3167,11 @@ static int mcp2517fd_open(struct net_device *net)
 	return 0;
 
 open_clean:
-	mcp2517fd_open_clean(net);
+	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
+	free_irq(spi->irq, priv);
+	mcp2517fd_hw_sleep(spi);
+	mcp2517fd_power_enable(priv->transceiver, 0);
+	close_candev(net);
 
 	return ret;
 }
