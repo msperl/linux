@@ -3084,8 +3084,8 @@ static int mcp2517fd_setup(struct net_device *net,
 
 	/* setup value of con_register */
 	priv->regs.con = CAN_CON_STEF /* enable TEF */;
-	/* transmissin bandwidth sharing bits */
-	if (bw_sharing_log2bits < 12)
+	/* transmission bandwidth sharing bits */
+	if (bw_sharing_log2bits > 12)
 		bw_sharing_log2bits = 12;
 	priv->regs.con |= bw_sharing_log2bits << CAN_CON_TXBWS_SHIFT;
 	/* non iso FD mode */
