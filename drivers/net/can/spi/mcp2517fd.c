@@ -789,8 +789,6 @@ struct mcp2517fd_trigger_tx_message {
 struct mcp2517fd_read_fifo_info {
 	struct mcp2517fd_obj_ts *rxb[32];
 	int rx_count;
-	u32 tsmin;
-	u32 tsmax;
 };
 
 struct mcp2517fd_priv {
@@ -1619,8 +1617,6 @@ static void mcp2517fd_clear_queued_fifos(struct spi_device *spi)
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
 	/* prepare rfi - mostly used for sorting */
-	priv->queued_fifos.tsmin = -1;
-	priv->queued_fifos.tsmax = 0;
 	priv->queued_fifos.rx_count = 0;
 }
 
@@ -1633,12 +1629,6 @@ static void mcp2517fd_addto_queued_fifos(struct spi_device *spi,
 	/* add pointer to queued array-list */
 	rfi->rxb[rfi->rx_count] = obj;
 	rfi->rx_count++;
-
-	/* and get tsmin/tsmax */
-	if (rfi->tsmin > obj->ts)
-		rfi->tsmin = obj->ts;
-	if (rfi->tsmax > obj->ts)
-		rfi->tsmax = obj->ts;
 }
 
 static int mcp2517fd_process_queued_tef(struct spi_device *spi,
