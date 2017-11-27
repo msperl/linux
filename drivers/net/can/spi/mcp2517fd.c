@@ -3401,6 +3401,30 @@ static const struct spi_device_id mcp2517fd_id_table[] = {
 };
 MODULE_DEVICE_TABLE(spi, mcp2517fd_id_table);
 
+
+static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
+{
+	struct spi_device *spi = file->private;
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u8 data[CAN_FIFOCON(0)];
+	int i;
+	int ret;
+
+	ret = mcp2517fd_cmd_readn(spi, 0, data, sizeof(data),
+				  priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+
+	mcp2517fd_convert_to_cpu((u32*)data, ARRAY_SIZE(data));
+
+	for(i = 0; i < sizeof(data); i += 4) {
+		seq_printf(file, "Reg 0x%02x = 0x%08x\n",
+			   i, *((u32*)(data + i)));
+	}
+
+	return 0;
+}
+
 static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 {
 #if defined(CONFIG_DEBUG_FS)
@@ -3493,6 +3517,9 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 				   &priv->fifos.fifo_address[i]);
 	}
 
+	/* dump the controller registers themselves */
+	debugfs_create_devm_seqfile(&priv->spi->dev, "reg_dump",
+				    root, mcp2517fd_dump_regs);
 #endif
 }
 
