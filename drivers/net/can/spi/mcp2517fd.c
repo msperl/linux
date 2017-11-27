@@ -1152,7 +1152,7 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 
 	/* do a partial read */
 	*data = 0;
-	ret = mcp2517fd_cmd_readn(spi, reg,
+	ret = mcp2517fd_cmd_readn(spi, reg + first_byte,
 				  ((void *)data + first_byte), len_byte,
 				  speed_hz);
 	if (ret)
