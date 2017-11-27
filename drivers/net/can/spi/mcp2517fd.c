@@ -1120,6 +1120,20 @@ static int mcp2517fd_convert_to_cpu(u32 *data, int n)
 	return 0;
 }
 
+static int mcp2517fd_first_byte(u32 mask)
+{
+	return (mask & 0x0000ffff) ?
+		((mask & 0x000000ff) ? 0 : 1) :
+		((mask & 0x00ff0000) ? 2 : 3);
+}
+
+static int mcp2517fd_last_byte(u32 mask)
+{
+	return (mask & 0xffff0000) ?
+		((mask & 0xff000000) ? 3 : 2) :
+		((mask & 0x0000ff00) ? 1 : 0);
+}
+
 /* read a register, but we are only interrested in a few bytes */
 static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 				   u32 *data, u32 mask, u32 speed_hz)
@@ -1132,8 +1146,8 @@ static int mcp2517fd_cmd_read_mask(struct spi_device *spi, u32 reg,
 		return -EINVAL;
 
 	/* calculate first and last byte used */
-	first_byte = (ffs(mask) - 1) >> 3;
-	last_byte = (fls(mask) - 1) >> 3;
+	first_byte = mcp2517fd_first_byte(mask);
+	last_byte = mcp2517fd_last_byte(mask);
 	len_byte = last_byte - first_byte + 1;
 
 	/* do a partial read */
@@ -1165,8 +1179,8 @@ static int mcp2517fd_cmd_write_mask(struct spi_device *spi, u32 reg,
 		return -EINVAL;
 
 	/* calculate first and last byte used */
-	first_byte = (ffs(mask) - 1)  >> 3;
-	last_byte = (fls(mask) - 1)  >> 3;
+	first_byte = mcp2517fd_first_byte(mask);
+	last_byte = mcp2517fd_last_byte(mask);
 	len_byte = last_byte - first_byte + 1;
 
 	/* prepare buffer */
@@ -1265,7 +1279,7 @@ static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 	struct mcp2517fd_trigger_tx_message *txm;
 	int i, fifo;
 	const u32 trigger = CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC;
-	const int first_byte = (ffs(trigger) - 1)  >> 3;
+	const int first_byte = mcp2517fd_first_byte(trigger);
 
 	priv->spi_transmit_fifos = kcalloc(
 		priv->fifos.tx_fifos,
@@ -1589,7 +1603,7 @@ static int mcp2517fd_bulk_release_fifos(struct spi_device *spi,
 
 	/* calculate start address and length */
 	int fifos = end - start;
-	int first_byte = (ffs(CAN_FIFOCON_UINC) - 1)  >> 3;
+	int first_byte = mcp2517fd_first_byte(CAN_FIFOCON_UINC);
 	int addr = CAN_FIFOCON(start);
 	int len = 1 + (fifos - 1) * FIFOCON_SPACING;
 
