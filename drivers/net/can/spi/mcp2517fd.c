@@ -874,6 +874,10 @@ struct mcp2517fd_priv {
 		u64 rx_overflow;
 		/* statistics of FIFO usage */
 		u64 fifo_usage[32];
+
+		/* message abort counter */
+		u64 rx_mab;
+		u64 tx_mab;
 	} stats;
 
 	/* the current status of the mcp2517fd */
@@ -2139,9 +2143,62 @@ static int mcp2517fd_can_ist_handle_eccif(struct spi_device *spi)
 				 priv->spi_speed_hz);
 }
 
+static int mcp2517fd_can_ist_handle_serrif_txmab(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	dev_warn_ratelimited(&spi->dev, "TX MAB underflow\n");
+	priv->net->stats.tx_fifo_errors++;
+	priv->net->stats.tx_errors++;
+	priv->stats.tx_mab++;
+
+	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_serrif_rxmab(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	dev_warn_ratelimited(&spi->dev, "RX MAB overflow\n");
+	priv->net->stats.rx_dropped++;
+	priv->net->stats.rx_errors++;
+	priv->stats.rx_mab++;
+
+	return 0;
+}
+
 static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 val = 0;
+	int ret;
+
+	/* clear serr only */
+	ret = mcp2517fd_cmd_write_mask(spi, CAN_INT,
+				       priv->status.intf & (~CAN_INT_SERRIF),
+				       CAN_INT_SERRIF,
+				       priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+
+	/* check if we are in restricted mode */
+	ret = mcp2517fd_cmd_read_mask(spi, CAN_CON, &val,
+				      CAN_CON_OPMOD_MASK,
+				      priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+
+	/* if we are restricted, then return to "normal" mode */
+	if ((val & CAN_CON_OPMOD_MASK) ==
+	    (CAN_CON_MODE_RESTRICTED << CAN_CON_OPMOD_SHIFT)) {
+		ret = mcp2517fd_cmd_write_mask(
+			spi, CAN_CON,
+			priv->regs.con,
+			CAN_CON_REQOP_MASK,
+			priv->spi_setup_speed_hz);
+		if (ret)
+			return ret;
+	}
 
 	/* Errors here are:
 	 * * Bus Bandwidth Error: when a RX Message Assembly Buffer
@@ -2155,19 +2212,12 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 
 	priv->can_err_id |= CAN_ERR_CRTL;
 	priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
-	priv->int_clear_mask |= CAN_INT_SERRIF;
 
 	/* a mode change or ecc error would indicate TX MAB Undeflow */
-	if (priv->status.intf & (CAN_INT_MODIF | CAN_INT_ECCIF)) {
-		dev_warn_ratelimited(&spi->dev, "TX MAB underflow\n");
-		priv->net->stats.tx_fifo_errors++;
-		priv->net->stats.tx_errors++;
-	} else {
-		dev_warn_ratelimited(&spi->dev, "RX MAB overflow\n");
-		priv->net->stats.rx_dropped++;
-		priv->net->stats.rx_errors++;
-	}
-	return 0;
+	if (priv->status.intf & (CAN_INT_MODIF | CAN_INT_ECCIF))
+		return mcp2517fd_can_ist_handle_serrif_txmab(spi);
+	else
+		return mcp2517fd_can_ist_handle_serrif_rxmab(spi);
 }
 
 static int mcp2517fd_disable_interrupts(struct spi_device *spi,
@@ -2267,6 +2317,15 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* clear queued fifos */
 	mcp2517fd_clear_queued_fifos(spi);
 
+	/* system error interrupt needs to get handled first
+	 * to get us out of restricted mode
+	 */
+	if (priv->status.intf & CAN_INT_SERRIF) {
+		ret = mcp2517fd_can_ist_handle_serrif(spi);
+		if (ret)
+			return ret;
+       }
+
 	/* handle the rx */
 	if (priv->status.intf & CAN_INT_RXIF) {
 		ret = mcp2517fd_can_ist_handle_rxif(spi);
@@ -2312,13 +2371,6 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* sram ECC error interrupt */
 	if (priv->status.intf & CAN_INT_ECCIF) {
 		ret = mcp2517fd_can_ist_handle_eccif(spi);
-		if (ret)
-			return ret;
-	}
-
-	/* system error interrupt*/
-	if (priv->status.intf & CAN_INT_SERRIF) {
-		ret = mcp2517fd_can_ist_handle_serrif(spi);
 		if (ret)
 			return ret;
 	}
@@ -3307,6 +3359,8 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->fifos.rx_fifo_mask);
 	debugfs_create_u64("rx_overflow", 0444, rx,
 			   &priv->stats.rx_overflow);
+	debugfs_create_u64("rx_mab", 0444, rx,
+			   &priv->stats.rx_mab);
 
 	debugfs_create_u32("fifo_start", 0444, tx,
 			   &priv->fifos.tx_fifo_start);
@@ -3322,6 +3376,8 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->fifos.tx_processed_mask);
 	debugfs_create_u32("queue_status", 0444, tx,
 			   &priv->tx_queue_status);
+	debugfs_create_u64("tx_mab", 0444, tx,
+			   &priv->stats.tx_mab);
 
 	debugfs_create_u32("fifo_max_payload_size", 0444, root,
 			   &priv->fifos.payload_size);
