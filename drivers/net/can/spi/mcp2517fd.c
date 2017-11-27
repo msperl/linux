@@ -939,6 +939,13 @@ struct mcp2517fd_priv {
 
 	/* status of the tx_queue enabled/disabled */
 	u32 tx_queue_status;
+#define TX_QUEUE_STATUS_INIT		0
+#define TX_QUEUE_STATUS_RUNNING		1
+#define TX_QUEUE_STATUS_NEEDS_START	2
+#define TX_QUEUE_STATUS_STOPPED		3
+#define TX_QUEUE_STATUS_STOPPED_XMIT	4
+#define TX_QUEUE_STATUS_STOPPED_TXABORT	5
+#define TX_QUEUE_STATUS_STOPPED_BUSOFF	6
 
 	/* spi-tx/rx buffers for efficient transfers
 	 * used during setup and irq
@@ -1389,7 +1396,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 
 	if (priv->can.state == CAN_STATE_BUS_OFF) {
-		priv->tx_queue_status = 0;
+		priv->tx_queue_status = TX_QUEUE_STATUS_STOPPED_BUSOFF;
 		netif_stop_queue(priv->net);
 		return NETDEV_TX_BUSY;
 	}
@@ -1414,7 +1421,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 
 	/* if we are the last one, then stop the queue */
 	if (fifo == priv->fifos.tx_fifo_start) {
-		priv->tx_queue_status = 0;
+		priv->tx_queue_status = TX_QUEUE_STATUS_STOPPED_XMIT;
 		netif_stop_queue(priv->net);
 	}
 
@@ -1961,7 +1968,7 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 		priv->fifos.tx_processed_mask |= BIT(fifo);
 
 		if (fifo == priv->fifos.tx_fifo_start)
-			priv->tx_queue_status = 2;
+			priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
 	}
 
 	return 0;
@@ -2344,12 +2351,12 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	ret = mcp2517fd_process_queued_fifos(spi);
 
 	/* restart the tx queue if needed */
-	if (priv->tx_queue_status == 2) {
+	if (priv->tx_queue_status == TX_QUEUE_STATUS_NEEDS_START) {
 		/* nothing should be left pending /in flight now... */
 		priv->fifos.tx_pending_mask = 0;
 		priv->fifos.tx_submitted_mask = 0;
 		priv->fifos.tx_processed_mask = 0;
-		priv->tx_queue_status = 1;
+		priv->tx_queue_status = TX_QUEUE_STATUS_RUNNING;
 		/* wake queue now */
 		netif_wake_queue(priv->net);
 	}
@@ -3215,7 +3222,7 @@ static int mcp2517fd_open(struct net_device *net)
 
 	can_led_event(net, CAN_LED_EVENT_OPEN);
 
-	priv->tx_queue_status = 1;
+	priv->tx_queue_status = TX_QUEUE_STATUS_RUNNING;
 	netif_wake_queue(net);
 
 	return 0;
