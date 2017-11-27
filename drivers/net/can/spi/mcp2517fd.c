@@ -1974,6 +1974,94 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 	return 0;
 }
 
+static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
+                                               int fifo)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 val;
+	int ret;
+
+	/* read fifo status */
+	ret = mcp2517fd_cmd_read(spi,
+				 CAN_FIFOSTA(fifo),
+				 &val,
+				 priv->spi_speed_hz);
+	if (ret)
+		return ret;
+
+	/* clear the relevant interrupt flags */
+	dev_dbg(&spi->dev, "txatif-clearing fifo %i\n", fifo);
+	ret = mcp2517fd_cmd_write_mask(spi,
+				       CAN_FIFOSTA(fifo),
+				       0,
+				       CAN_FIFOSTA_TXABT |
+				       CAN_FIFOSTA_TXLARB |
+				       CAN_FIFOSTA_TXERR |
+				       CAN_FIFOSTA_TXATIF,
+				       priv->spi_speed_hz);
+
+	/* for specific cases we could trigger a retransmit
+	 * instead of an abort.
+	 */
+
+	/* and we release it from the echo_skb buffer
+	 * NOTE: this is one place where packet delivery will not
+	 * be ordered, as we do not have any timing information
+	 * when this occured
+	 */
+	can_get_echo_skb(priv->net, fifo);
+
+	/* but we need to run a bit of cleanup */
+	priv->status.txif &= ~BIT(fifo);
+	priv->net->stats.tx_aborted_errors++;
+
+	/* mark the fifo as processed */
+	dev_err(&spi->dev, "TXMAB: %i - %i\n",fifo,priv->tx_queue_status);
+	priv->fifos.tx_processed_mask |= BIT(fifo);
+
+	/* handle all the known cases accordingly - ignoring FIFO full */
+	val &= CAN_FIFOSTA_TXABT |
+		CAN_FIFOSTA_TXLARB |
+		CAN_FIFOSTA_TXERR;
+	switch(val) {
+	case CAN_FIFOSTA_TXERR:
+		break;
+	default:
+		dev_warn_ratelimited(
+			&spi->dev,
+			"Unknown TX-Fifo abort condition: %08x - stopping tx-queue\n",
+			val);
+		priv->tx_queue_status = TX_QUEUE_STATUS_STOPPED_TXABORT;
+		netif_stop_queue(priv->net);
+		break;
+	}
+
+	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_txatif(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int i;
+	int ret;
+
+	/* process all the fifos with that flag set */
+	for(i = priv->fifos.tx_fifo_start;
+	    i < priv->fifos.tx_fifo_start + priv->fifos.tx_fifos;
+	    i++) {
+		if (priv->status.txatif & BIT(i)) {
+			ret = mcp2517fd_can_ist_handle_txatif_fifo(spi, i);
+			if (ret)
+				return ret;
+		}
+        }
+
+	if (priv->status.txatif & BIT(priv->fifos.tx_fifo_start))
+		priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
+
+        return 0;
+}
+
 static void mcp2517fd_error_skb(struct net_device *net)
 {
 	struct mcp2517fd_priv *priv = netdev_priv(net);
@@ -2336,6 +2424,13 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* handle the rx */
 	if (priv->status.intf & CAN_INT_RXIF) {
 		ret = mcp2517fd_can_ist_handle_rxif(spi);
+		if (ret)
+			return ret;
+	}
+
+	/* handle aborted TX FIFOs */
+	if (priv->status.txatif) {
+		ret = mcp2517fd_can_ist_handle_txatif(spi);
 		if (ret)
 			return ret;
 	}
