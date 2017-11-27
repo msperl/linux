@@ -2410,6 +2410,20 @@ static void mcp2517fd_hw_sleep(struct spi_device *spi)
 			    priv->spi_setup_speed_hz);
 }
 
+static void mcp2517fd_wake_queue(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/* nothing should be left pending /in flight now... */
+	priv->fifos.tx_pending_mask = 0;
+	priv->fifos.tx_submitted_mask = 0;
+	priv->fifos.tx_processed_mask = 0;
+	priv->tx_queue_status = TX_QUEUE_STATUS_RUNNING;
+
+	/* wake queue now */
+	netif_wake_queue(priv->net);
+}
+
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
@@ -2463,15 +2477,8 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	ret = mcp2517fd_process_queued_fifos(spi);
 
 	/* restart the tx queue if needed */
-	if (priv->tx_queue_status == TX_QUEUE_STATUS_NEEDS_START) {
-		/* nothing should be left pending /in flight now... */
-		priv->fifos.tx_pending_mask = 0;
-		priv->fifos.tx_submitted_mask = 0;
-		priv->fifos.tx_processed_mask = 0;
-		priv->tx_queue_status = TX_QUEUE_STATUS_RUNNING;
-		/* wake queue now */
-		netif_wake_queue(priv->net);
-	}
+	if (priv->tx_queue_status == TX_QUEUE_STATUS_NEEDS_START)
+		mcp2517fd_wake_queue(spi);
 
 	/* handle error interrupt flags */
 	if (priv->status.rxovif) {
@@ -2621,6 +2628,22 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 		ret = mcp2517fd_can_ist_handle_status(spi);
 		if (ret)
 			return ret;
+	}
+
+	/* there is something missing with the serrif handling and
+	 * the corresponding tx-aborted handling, so that the queue
+	 * is not woken propperly
+	 */
+	if ((priv->tx_queue_status >= TX_QUEUE_STATUS_STOPPED) &&
+	    (priv->fifos.tx_pending_mask == priv->fifos.tx_submitted_mask) &&
+	    (priv->status.txif == 0)) {
+		dev_info(&spi->dev,
+			 "Workarround race restarting workqueue %i - %08x - %08x %08x\n",
+			 priv->tx_queue_status,
+			 priv->fifos.tx_pending_mask,
+			 priv->fifos.tx_submitted_mask,
+			 priv->status.txif);
+		mcp2517fd_wake_queue(spi);
 	}
 
 	priv->stats.irq_state = IRQ_STATE_HANDLED;
