@@ -2266,6 +2266,7 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	u32 val = 0;
+	u32 mode;
 	int ret;
 
 	/* clear serr only */
@@ -2284,8 +2285,9 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 		return ret;
 
 	/* if we are restricted, then return to "normal" mode */
-	if ((val & CAN_CON_OPMOD_MASK) ==
-	    (CAN_CON_MODE_RESTRICTED << CAN_CON_OPMOD_SHIFT)) {
+	mode = (val & CAN_CON_OPMOD_MASK) >> CAN_CON_OPMOD_SHIFT;
+	if ( mode == CAN_CON_MODE_RESTRICTED) {
+		dev_dbg(&spi->dev, "Moving out of RESTRICTED mode\n");
 		ret = mcp2517fd_cmd_write_mask(
 			spi, CAN_CON,
 			priv->regs.con,
