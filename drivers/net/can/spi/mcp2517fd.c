@@ -2272,14 +2272,14 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	ret = mcp2517fd_cmd_write_mask(spi, CAN_INT,
 				       priv->status.intf & (~CAN_INT_SERRIF),
 				       CAN_INT_SERRIF,
-				       priv->spi_setup_speed_hz);
+				       priv->spi_speed_hz);
 	if (ret)
 		return ret;
 
 	/* check if we are in restricted mode */
 	ret = mcp2517fd_cmd_read_mask(spi, CAN_CON, &val,
 				      CAN_CON_OPMOD_MASK,
-				      priv->spi_setup_speed_hz);
+				      priv->spi_speed_hz);
 	if (ret)
 		return ret;
 
@@ -2290,7 +2290,7 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 			spi, CAN_CON,
 			priv->regs.con,
 			CAN_CON_REQOP_MASK,
-			priv->spi_setup_speed_hz);
+			priv->spi_speed_hz);
 		if (ret)
 			return ret;
 	}
