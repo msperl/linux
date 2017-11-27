@@ -2351,6 +2351,7 @@ static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 		CAN_INT_SERRIE |
 		CAN_INT_IVMIE |
 		CAN_INT_CERRIE |
+		CAN_INT_RXOVIE |
 		CAN_INT_ECCIE;
 	return mcp2517fd_cmd_write(spi, CAN_INT,
 				   priv->status.intf,
