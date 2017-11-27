@@ -1925,67 +1925,139 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 	return 0;
 }
 
+static void mcp2517fd_mark_tx_processed(struct spi_device *spi,
+					int fifo)
+{
+        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+        /* set mask */
+        priv->fifos.tx_processed_mask |= BIT(fifo);
+
+        /* check if we should reenable the TX-queue */
+        if (fifo == priv->fifos.tx_fifo_start)
+                priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
+}
+
+static int mcp2517fd_can_ist_handle_tefif_handle_single(
+        struct spi_device *spi)
+{
+        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+        struct mcp2517fd_obj_tef *tef;
+        int fifo;
+        int ret;
+
+        /* calc address in address space */
+        tef = (struct mcp2517fd_obj_tef *)(priv->fifos.fifo_data +
+                                           priv->fifos.tef_address);
+
+        /* read all the object data */
+        ret = mcp2517fd_cmd_readn(spi,
+                                  FIFO_DATA(priv->fifos.tef_address),
+                                  tef, sizeof(*tef) - 1,
+                                  priv->spi_speed_hz);
+
+        /* increment the counter to read next */
+        ret = mcp2517fd_cmd_write_mask(spi,
+                                       CAN_TEFCON,
+                                       CAN_TEFCON_UINC,
+                                       CAN_TEFCON_UINC,
+                                       priv->spi_speed_hz);
+
+        /* transform the data to system byte order */
+        mcp2517fd_obj_ts_from_le(&tef->header);
+
+        fifo = (tef->header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
+                CAN_OBJ_FLAGS_SEQ_SHIFT;
+
+        /* submit to queue */
+        tef->header.flags |= CAN_OBJ_FLAGS_CUSTOM_ISTEF;
+        mcp2517fd_addto_queued_fifos(spi, &tef->header);
+
+        /* increment tef_address with rollover */
+        priv->fifos.tef_address += sizeof(*tef);
+        if (priv->fifos.tef_address > priv->fifos.tef_address_end)
+                priv->fifos.tef_address =
+                        priv->fifos.tef_address_start;
+
+        /* and mark as processed right now */
+        mcp2517fd_mark_tx_processed(spi, fifo);
+
+        return 0;
+}
+
+static int mcp2517fd_can_ist_handle_tefif_conservative(struct spi_device *spi)
+{
+        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+        u32 val[2];
+        int ret;
+
+        while (1) {
+                /* get the current TEFSTA and TEFUA */
+                ret = mcp2517fd_cmd_readn(priv->spi,
+                                          CAN_TEFSTA,
+                                          val,
+                                          8,
+                                          priv->spi_speed_hz);
+                if (ret)
+                        return ret;
+                mcp2517fd_convert_to_cpu(val, 2);
+
+                /* check for interrupt flags */
+                if (!(val[0] & CAN_TEFSTA_TEFNEIF))
+                        return 0;
+
+                /* handle a single TEF taking the address we read
+                 * not the computed version
+                 */
+                priv->fifos.tef_address = val[1];
+                ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
+                if (ret)
+                        return ret;
+        }
+
+        return 0;
+}
+
+static int mcp2517fd_can_ist_handle_tefif_count(struct spi_device *spi,
+                                                int count)
+{
+        int i;
+        int ret;
+
+        /* now clear TEF for each */
+        /* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
+        for (i = 0; i < count; i++) {
+                /* handle a single TEF */
+                ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
+                if (ret)
+                        return ret;
+        }
+
+        return 0;
+}
+
 static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	struct mcp2517fd_obj_tef *tef;
-	u32 pending = priv->fifos.tx_pending_mask &
-		(~priv->fifos.tx_processed_mask);
-	int i, count, fifo;
-	int ret;
+        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+        u32 pending = priv->fifos.tx_pending_mask &
+                (~priv->fifos.tx_processed_mask);
+        int count;
 
-	/* calculate the number of fifos that have been processed */
-	count = hweight_long(pending);
-	count -= hweight_long(priv->status.txreq);
-	if (count <= 0) {
-		dev_err(&spi->dev,
-			"handle_tefif: unexpected count = %i\n",
-			count);
-		return -EINVAL;
-	}
+        /* calculate the number of fifos that have been processed */
+        count = hweight_long(pending);
+        count -= hweight_long(priv->status.txreq);
 
-	/* now clear TEF for each */
-	/* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
-	for (i = 0; i < count; i++) {
-		/* calc address in address space */
-		tef = (struct mcp2517fd_obj_tef *)(priv->fifos.fifo_data +
-						   priv->fifos.tef_address);
-		/* read all the object data */
-		ret = mcp2517fd_cmd_readn(spi,
-					  FIFO_DATA(priv->fifos.tef_address),
-					  tef, sizeof(*tef),
-					  priv->spi_speed_hz);
+return mcp2517fd_can_ist_handle_tefif_conservative(spi);
 
-		/* increment the counter to read next */
-		ret = mcp2517fd_cmd_write_mask(spi,
-					       CAN_TEFCON,
-					       CAN_TEFCON_UINC,
-					       CAN_TEFCON_UINC,
-					       priv->spi_speed_hz);
+        /* after a TX MAB we take the long route... */
+        if (priv->status.intf & CAN_INT_SERRIF)
+                return mcp2517fd_can_ist_handle_tefif_conservative(spi);
 
-		/* transform the data to system byte order */
-		mcp2517fd_obj_ts_from_le(&tef->header);
+        /* also in case of unexpected results */
+        if (count <= 0)
+                return mcp2517fd_can_ist_handle_tefif_conservative(spi);
 
-		fifo = (tef->header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
-			CAN_OBJ_FLAGS_SEQ_SHIFT;
-
-		/* submit to queue */
-		tef->header.flags |= CAN_OBJ_FLAGS_CUSTOM_ISTEF;
-		mcp2517fd_addto_queued_fifos(spi, &tef->header);
-
-		/* increment tef */
-		priv->fifos.tef_address += sizeof(*tef);
-		if (priv->fifos.tef_address > priv->fifos.tef_address_end)
-			priv->fifos.tef_address = priv->fifos.tef_address_start;
-
-		/* and set mask */
-		priv->fifos.tx_processed_mask |= BIT(fifo);
-
-		if (fifo == priv->fifos.tx_fifo_start)
-			priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
-	}
-
-	return 0;
+        return mcp2517fd_can_ist_handle_tefif_count(spi, count);
 }
 
 static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
@@ -2031,7 +2103,7 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 
 	/* mark the fifo as processed */
 	dev_err(&spi->dev, "TXMAB: %i - %i\n",fifo,priv->tx_queue_status);
-	priv->fifos.tx_processed_mask |= BIT(fifo);
+	 mcp2517fd_mark_tx_processed(spi, fifo);
 
 	/* handle all the known cases accordingly - ignoring FIFO full */
 	val &= CAN_FIFOSTA_TXABT |
@@ -2629,24 +2701,6 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 		if (ret)
 			return ret;
 	}
-
-	/* there is something missing with the serrif handling and
-	 * the corresponding tx-aborted handling, so that the queue
-	 * is not woken propperly
-	 */
-	if ((priv->tx_queue_status >= TX_QUEUE_STATUS_STOPPED) &&
-	    (priv->fifos.tx_pending_mask == priv->fifos.tx_submitted_mask) &&
-	    (priv->status.txif == 0)) {
-		dev_info(&spi->dev,
-			 "Workarround race restarting workqueue %i - %08x - %08x %08x\n",
-			 priv->tx_queue_status,
-			 priv->fifos.tx_pending_mask,
-			 priv->fifos.tx_submitted_mask,
-			 priv->status.txif);
-		mcp2517fd_wake_queue(spi);
-	}
-
-	priv->stats.irq_state = IRQ_STATE_HANDLED;
 
 	return IRQ_HANDLED;
 }
