@@ -2014,10 +2014,15 @@ static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 	int mode;
 	int ret;
 
+	/* Note that this irq does not get triggered in all situations
+	 * for example SERRIF will move to RESTICTED or LISTENONLY
+	 * but MODIF will not be raised!
+	 */
+
 	/* mask interrupt for clearing */
 	priv->int_clear_mask |= CAN_INT_MODIF;
 
-	/* read the mode bit */
+	/* read the mode bits */
 	ret = mcp2517fd_cmd_read_mask(spi,
 				      CAN_CON,
 				      &priv->regs.con,
@@ -2029,13 +2034,17 @@ static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 	mode = (priv->regs.con & CAN_CON_OPMOD_MASK) >>
 		CAN_CON_OPMOD_SHIFT;
 
-	/* this mostly happens on initialization */
-	if (mode == priv->active_can_mode) {
-		dev_err(&spi->dev,
-			"Controller switched to already active mode: %s(%u)\n",
-			mcp2517fd_mode_names[mode], mode);
-		return 0;
-	}
+	/* the controller itself will transition to sleep, so we ignore it */
+	if (mode == CAN_CON_MODE_SLEEP)
+		goto out;
+
+	/* switches to the same mode as before are also ignored
+	 * - this typically happens if the driver is shortly
+	 *   switching to a different mode and then returning to the
+	 *   original mode
+	 */
+	if (mode == priv->active_can_mode)
+		goto out;
 
 	/* these we need to handle correctly */
 	dev_err(&spi->dev,
@@ -2045,6 +2054,7 @@ static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 		mcp2517fd_mode_names[mode], mode);
 
 	/* finally assign the mode as currently active */
+out:
 	priv->active_can_mode = mode;
 	return 0;
 }
