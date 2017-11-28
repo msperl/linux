@@ -1488,6 +1488,14 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 		spi, fifo, &obj, frame->can_dlc, frame->data);
 }
 
+static bool mcp2517fd_is_last_txfifo(struct spi_device *spi,
+				     int fifo)
+{
+        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	return (fifo ==
+		(priv->fifos.tx_fifo_start + priv->fifos.tx_fifos - 1));
+}
+
 static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 					struct net_device *net)
 {
@@ -1511,12 +1519,12 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 
 	/* decide on fifo to assign */
 	if (pending_mask)
-		fifo = ffs(pending_mask) - 2;
+		fifo = fls(pending_mask);
 	else
-		fifo = priv->fifos.tx_fifo_start + priv->fifos.tx_fifos - 1;
+		fifo = priv->fifos.tx_fifo_start;
 
 	/* handle error - this should not happen... */
-	if (fifo < priv->fifos.tx_fifo_start) {
+	if (fifo >= priv->fifos.tx_fifo_start + priv->fifos.tx_fifos) {
 		dev_err(&spi->dev,
 			"reached tx-fifo %i, which is not valid\n",
 			fifo);
@@ -1524,9 +1532,8 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 	}
 
 	/* if we are the last one, then stop the queue */
-	if (fifo == priv->fifos.tx_fifo_start) {
+        if (mcp2517fd_is_last_txfifo(spi, fifo))
 		mcp2517fd_stop_queue(priv->net);
-	}
 
 	/* mark as submitted */
 	priv->fifos.tx_submitted_mask |= BIT(fifo);
@@ -2028,7 +2035,7 @@ static void mcp2517fd_mark_tx_processed(struct spi_device *spi,
         priv->fifos.tx_processed_mask |= BIT(fifo);
 
         /* check if we should reenable the TX-queue */
-        if (fifo == priv->fifos.tx_fifo_start)
+        if (mcp2517fd_is_last_txfifo(spi, fifo))
                 priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
 }
 
@@ -2436,13 +2443,16 @@ static int mcp2517fd_can_ist_handle_serrif_rxmab(struct spi_device *spi)
 static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 clear = CAN_INT_SERRIF | CAN_INT_MODIF | CAN_INT_IVMIF;
 	int mode;
 	int ret;
 
-	/* clear serr only */
+	/* clear some interrupts immediately,
+	 * so that we get notified if they happen again
+	 */
 	ret = mcp2517fd_cmd_write_mask(spi, CAN_INT,
-				       priv->status.intf & (~CAN_INT_SERRIF),
-				       CAN_INT_SERRIF,
+				       priv->status.intf & (~clear),
+				       clear,
 				       priv->spi_speed_hz);
 	if (ret)
 		return ret;
@@ -3212,7 +3222,11 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		fifo = priv->fifos.tx_fifo_start + i;
 		ret = mcp2517fd_cmd_write(
 			spi, CAN_FIFOCON(fifo),
-			val | (fifo << CAN_FIFOCON_TXPRI_SHIFT),
+			/* the prioriy needs to be inverted
+			 * we need to run from lowest to highest to
+			 * avoid MAB errors
+			 */
+			val | ((31 - fifo) << CAN_FIFOCON_TXPRI_SHIFT),
 			priv->spi_setup_speed_hz);
 		if (ret)
 			return ret;
