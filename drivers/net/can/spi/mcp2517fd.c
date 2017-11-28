@@ -1740,6 +1740,11 @@ static void mcp2517fd_addto_queued_fifos(struct spi_device *spi,
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct mcp2517fd_read_fifo_info *rfi = &priv->queued_fifos;
 
+	/* timestamps must ignore the highest byte, so we shift it,
+	 * so that it still compares correctly
+	 */
+	obj->ts <<= 8;
+
 	/* add pointer to queued array-list */
 	rfi->rxb[rfi->rx_count] = obj;
 	rfi->rx_count++;
@@ -2042,7 +2047,11 @@ static int mcp2517fd_can_ist_handle_tefif_handle_single(
         /* read all the object data */
         ret = mcp2517fd_cmd_readn(spi,
                                   FIFO_DATA(priv->fifos.tef_address),
-                                  tef, sizeof(*tef) - 1,
+                                  tef,
+				  /* we do not read the last byte of the ts
+				   * to avoid MAB issiues
+				   */
+				  sizeof(*tef) - 1,
                                   priv->spi_speed_hz);
 
         /* increment the counter to read next */
