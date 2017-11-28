@@ -924,8 +924,6 @@ struct mcp2517fd_priv {
 	int restart_tx;
 
 	/* interrupt flags during irq handling */
-	u32 int_clear_mask;
-	u32 int_clear_value;
 	u32 bdiag1_clear_mask;
 	u32 bdiag1_clear_value;
 
@@ -2304,9 +2302,6 @@ static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 	 * but MODIF will not be raised!
 	 */
 
-	/* mask interrupt for clearing */
-	priv->int_clear_mask |= CAN_INT_MODIF;
-
 	/* get the mode */
 	ret = mcp2517fd_get_opmode(spi, &mode, priv->spi_speed_hz);
 	if (ret)
@@ -2349,7 +2344,6 @@ static int mcp2517fd_can_ist_handle_cerrif(struct spi_device *spi)
 
 	dev_err_ratelimited(&spi->dev, "CAN Bus error\n");
 	priv->can_err_id |= CAN_ERR_BUSERROR;
-	priv->int_clear_mask |= CAN_INT_CERRIF;
 
 	if (priv->status.bdiag1 &
 	    (CAN_BDIAG1_DBIT0ERR | CAN_BDIAG1_NBIT0ERR)) {
@@ -2396,7 +2390,6 @@ static int mcp2517fd_can_ist_handle_eccif(struct spi_device *spi)
 
 	priv->can_err_id |= CAN_ERR_CRTL;
 	priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
-	priv->int_clear_mask |= CAN_INT_ECCIF;
 
 	/* read ECC status register */
 	ret = mcp2517fd_cmd_read(spi, MCP2517FD_ECCSTAT, &val,
@@ -2443,13 +2436,13 @@ static int mcp2517fd_can_ist_handle_serrif_rxmab(struct spi_device *spi)
 static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u32 clear = CAN_INT_SERRIF | CAN_INT_MODIF | CAN_INT_IVMIF;
 	int mode;
 	int ret;
 
 	/* clear some interrupts immediately,
 	 * so that we get notified if they happen again
 	 */
+	u32 clear = CAN_INT_SERRIF | CAN_INT_MODIF | CAN_INT_IVMIF;
 	ret = mcp2517fd_cmd_write_mask(spi, CAN_INT,
 				       priv->status.intf & (~clear),
 				       clear,
@@ -2487,13 +2480,11 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	 */
 	if ((priv->status.intf & CAN_INT_MODIF) &&
 	    (priv->status.intf & CAN_INT_IVMIF)) {
-		priv->int_clear_mask |= CAN_INT_IVMIF | CAN_INT_MODIF;
 		return mcp2517fd_can_ist_handle_serrif_txmab(spi);
 	}
 
 	/* TODO: there are some specific conditions here as well */
 	if (0) {
-		priv->int_clear_mask |= 0;
 		return mcp2517fd_can_ist_handle_serrif_rxmab(spi);
 	}
 
@@ -2507,8 +2498,6 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 
 static int mcp2517fd_can_ist_handle_ivmif(struct spi_device *spi) {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-
-	priv->int_clear_mask |= CAN_INT_IVMIF;
 
 	/* if we have a systemerror as well, then ignore it */
 	if (priv->status.intf & CAN_INT_SERRIF)
@@ -2604,11 +2593,23 @@ static void mcp2517fd_hw_sleep(struct spi_device *spi)
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	const u32 clear_irq = CAN_INT_TBCIF |
+		CAN_INT_MODIF |
+		CAN_INT_SERRIF |
+		CAN_INT_CERRIF |
+		CAN_INT_WAKIF |
+		CAN_INT_IVMIF;
 	int ret;
 
+	/* clear all the interrupts asap */
+	ret = mcp2517fd_cmd_write_mask(spi, CAN_INT,
+				       priv->status.intf & (~clear_irq),
+				       clear_irq,
+				       priv->spi_speed_hz);
+	if (ret)
+		return ret;
+
 	/* interrupt clearing info */
-	priv->int_clear_value = 0;
-	priv->int_clear_mask = 0;
 	priv->bdiag1_clear_value = 0;
 	priv->bdiag1_clear_mask = 0;
 	priv->can_err_id = 0;
@@ -2752,15 +2753,6 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	}
 
 	/* clear int flags */
-	if (priv->int_clear_mask) {
-		ret = mcp2517fd_cmd_write_mask(spi,
-					       CAN_INT,
-					       priv->int_clear_value,
-					       priv->int_clear_mask,
-					       priv->spi_speed_hz);
-		if (ret)
-			return ret;
-	}
 	if (priv->bdiag1_clear_mask) {
 		ret = mcp2517fd_cmd_write_mask(spi,
 					       CAN_BDIAG1,
