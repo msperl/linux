@@ -3124,6 +3124,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 
 	/* set up tx fifos */
 	val = CAN_FIFOCON_TXEN |
+		CAN_FIFOCON_TXATIE | /* show up txatie flags in txatif reg */
 		CAN_FIFOCON_FRESET | /* reset FIFO */
 		(priv->fifos.payload_mode << CAN_FIFOCON_PLSIZE_SHIFT) |
 		(0 << CAN_FIFOCON_FSIZE_SHIFT); /* 1 FIFO only */
