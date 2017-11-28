@@ -943,9 +943,6 @@ struct mcp2517fd_priv {
 #define TX_QUEUE_STATUS_RUNNING		1
 #define TX_QUEUE_STATUS_NEEDS_START	2
 #define TX_QUEUE_STATUS_STOPPED		3
-#define TX_QUEUE_STATUS_STOPPED_XMIT	4
-#define TX_QUEUE_STATUS_STOPPED_TXABORT	5
-#define TX_QUEUE_STATUS_STOPPED_BUSOFF	6
 
 	/* spi-tx/rx buffers for efficient transfers
 	 * used during setup and irq
@@ -1215,6 +1212,69 @@ static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
 	return 0;
 }
 
+/* mcp2517fd opmode helper functions */
+
+static int mcp2517fd_get_opmode(struct spi_device *spi,
+				int *mode,
+				int speed_hz)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int ret;
+
+	/* read the mode */
+	ret = mcp2517fd_cmd_read_mask(spi,
+				      CAN_CON,
+				      &priv->regs.con,
+				      CAN_CON_OPMOD_MASK,
+				      speed_hz);
+	if (ret)
+		return ret;
+	/* calculate the mode */
+	*mode = (priv->regs.con & CAN_CON_OPMOD_MASK) >>
+		CAN_CON_OPMOD_SHIFT;
+
+	/* and assign to active mode as well */
+	priv->active_can_mode = *mode;
+
+	return 0;
+}
+
+static int mcp2517fd_set_opmode(struct spi_device *spi, int mode,
+				int speed_hz)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 val = priv->regs.con & ~CAN_CON_REQOP_MASK;
+
+	/* regs.con also contains the effective register */
+	priv->regs.con = val |
+		(mode << CAN_CON_REQOP_SHIFT) |
+		(mode << CAN_CON_OPMOD_SHIFT);
+	priv->active_can_mode = mode;
+
+	/* but only write the relevant section */
+	return mcp2517fd_cmd_write_mask(spi, CAN_CON,
+					priv->regs.con,
+					CAN_CON_REQOP_MASK,
+					speed_hz);
+}
+
+static int mcp2517fd_set_normal_opmode(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int mode;
+
+	if (priv->can.ctrlmode & CAN_CTRLMODE_LOOPBACK)
+		mode = CAN_CON_MODE_EXTERNAL_LOOPBACK;
+	else if (priv->can.ctrlmode & CAN_CTRLMODE_LISTENONLY)
+		mode = CAN_CON_MODE_LISTENONLY;
+	else if (priv->can.ctrlmode & CAN_CTRLMODE_FD)
+		mode = CAN_CON_MODE_MIXED;
+	else
+		mode = CAN_CON_MODE_CAN2_0;
+
+	return mcp2517fd_set_opmode(spi, mode, priv->spi_setup_speed_hz);
+}
+
 /* ideally these would be defined in uapi/linux/can.h */
 #define CAN_EFF_SID_SHIFT		(CAN_EFF_ID_BITS - CAN_SFF_ID_BITS)
 #define CAN_EFF_SID_BITS		CAN_SFF_ID_BITS
@@ -1257,6 +1317,37 @@ static void mcp2517fd_mcpid_to_canid(u32 mcpid, u32 mcpflags, u32 *id)
 	}
 
 	*id |= (mcpflags & CAN_OBJ_FLAGS_RTR) ? CAN_RTR_FLAG : 0;
+}
+
+static void __mcp2517fd_stop_queue(struct net_device *net,
+				   unsigned int id)
+{
+	struct mcp2517fd_priv *priv = netdev_priv(net);
+
+	if (priv->tx_queue_status >= TX_QUEUE_STATUS_STOPPED)
+		dev_warn(&priv->spi->dev,
+			 "tx-queue is already stopped by: %i\n",
+			 priv->tx_queue_status);
+
+	priv->tx_queue_status = id ? id : TX_QUEUE_STATUS_STOPPED;
+	netif_stop_queue(priv->net);
+}
+/* helper to identify who is stopping the queue by line number */
+#define mcp2517fd_stop_queue(spi) \
+	__mcp2517fd_stop_queue(spi,__LINE__);
+
+static void mcp2517fd_wake_queue(struct spi_device *spi)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	/* nothing should be left pending /in flight now... */
+	priv->fifos.tx_pending_mask = 0;
+	priv->fifos.tx_submitted_mask = 0;
+	priv->fifos.tx_processed_mask = 0;
+	priv->tx_queue_status = TX_QUEUE_STATUS_RUNNING;
+
+	/* wake queue now */
+	netif_wake_queue(priv->net);
 }
 
 /* CAN transmit related*/
@@ -1410,8 +1501,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 		return NETDEV_TX_OK;
 
 	if (priv->can.state == CAN_STATE_BUS_OFF) {
-		priv->tx_queue_status = TX_QUEUE_STATUS_STOPPED_BUSOFF;
-		netif_stop_queue(priv->net);
+		mcp2517fd_stop_queue(priv->net);
 		return NETDEV_TX_BUSY;
 	}
 
@@ -1435,8 +1525,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 
 	/* if we are the last one, then stop the queue */
 	if (fifo == priv->fifos.tx_fifo_start) {
-		priv->tx_queue_status = TX_QUEUE_STATUS_STOPPED_XMIT;
-		netif_stop_queue(priv->net);
+		mcp2517fd_stop_queue(priv->net);
 	}
 
 	/* mark as submitted */
@@ -2047,13 +2136,13 @@ static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
         count = hweight_long(pending);
         count -= hweight_long(priv->status.txreq);
 
-return mcp2517fd_can_ist_handle_tefif_conservative(spi);
-
-        /* after a TX MAB we take the long route... */
+#if 0
+        /* after a System Error we take the long route... */
         if (priv->status.intf & CAN_INT_SERRIF)
                 return mcp2517fd_can_ist_handle_tefif_conservative(spi);
+#endif
 
-        /* also in case of unexpected results */
+        /* in case of unexpected results handle "safely" */
         if (count <= 0)
                 return mcp2517fd_can_ist_handle_tefif_conservative(spi);
 
@@ -2076,7 +2165,7 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 		return ret;
 
 	/* clear the relevant interrupt flags */
-	dev_dbg(&spi->dev, "txatif-clearing fifo %i\n", fifo);
+	dev_err(&spi->dev, "txatif-clearing fifo %i\n", fifo);
 	ret = mcp2517fd_cmd_write_mask(spi,
 				       CAN_FIFOSTA(fifo),
 				       0,
@@ -2104,6 +2193,7 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 	/* mark the fifo as processed */
 	dev_err(&spi->dev, "TXMAB: %i - %i\n",fifo,priv->tx_queue_status);
 	 mcp2517fd_mark_tx_processed(spi, fifo);
+	dev_err(&spi->dev, "TXMAB:\t after %i\n",priv->tx_queue_status);
 
 	/* handle all the known cases accordingly - ignoring FIFO full */
 	val &= CAN_FIFOSTA_TXABT |
@@ -2117,8 +2207,6 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 			&spi->dev,
 			"Unknown TX-Fifo abort condition: %08x - stopping tx-queue\n",
 			val);
-		priv->tx_queue_status = TX_QUEUE_STATUS_STOPPED_TXABORT;
-		netif_stop_queue(priv->net);
 		break;
 	}
 
@@ -2128,22 +2216,18 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 static int mcp2517fd_can_ist_handle_txatif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	int i;
+	int i, fifo;
 	int ret;
 
 	/* process all the fifos with that flag set */
-	for(i = priv->fifos.tx_fifo_start;
-	    i < priv->fifos.tx_fifo_start + priv->fifos.tx_fifos;
-	    i++) {
-		if (priv->status.txatif & BIT(i)) {
-			ret = mcp2517fd_can_ist_handle_txatif_fifo(spi, i);
+	for(i = 0, fifo = priv->fifos.tx_fifo_start;
+	    i < priv->fifos.tx_fifos; i++, fifo++) {
+		if (priv->status.txatif & BIT(fifo)) {
+			ret = mcp2517fd_can_ist_handle_txatif_fifo(spi, fifo);
 			if (ret)
 				return ret;
 		}
         }
-
-	if (priv->status.txatif & BIT(priv->fifos.tx_fifo_start))
-		priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
 
         return 0;
 }
@@ -2207,17 +2291,10 @@ static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 	/* mask interrupt for clearing */
 	priv->int_clear_mask |= CAN_INT_MODIF;
 
-	/* read the mode bits */
-	ret = mcp2517fd_cmd_read_mask(spi,
-				      CAN_CON,
-				      &priv->regs.con,
-				      CAN_CON_OPMOD_MASK,
-				      priv->spi_speed_hz);
+	/* get the mode */
+	ret = mcp2517fd_get_opmode(spi, &mode, priv->spi_speed_hz);
 	if (ret)
-		return ret;
-
-	mode = (priv->regs.con & CAN_CON_OPMOD_MASK) >>
-		CAN_CON_OPMOD_SHIFT;
+		return 0;
 
 	/* the controller itself will transition to sleep, so we ignore it */
 	if (mode == CAN_CON_MODE_SLEEP)
@@ -2328,7 +2405,6 @@ static int mcp2517fd_can_ist_handle_serrif_txmab(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
-	dev_warn_ratelimited(&spi->dev, "TX MAB underflow\n");
 	priv->net->stats.tx_fifo_errors++;
 	priv->net->stats.tx_errors++;
 	priv->stats.tx_mab++;
@@ -2351,8 +2427,7 @@ static int mcp2517fd_can_ist_handle_serrif_rxmab(struct spi_device *spi)
 static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u32 val = 0;
-	u32 mode;
+	int mode;
 	int ret;
 
 	/* clear serr only */
@@ -2364,21 +2439,13 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 		return ret;
 
 	/* check if we are in restricted mode */
-	ret = mcp2517fd_cmd_read_mask(spi, CAN_CON, &val,
-				      CAN_CON_OPMOD_MASK,
-				      priv->spi_speed_hz);
+	ret = mcp2517fd_get_opmode(spi, &mode, priv->spi_speed_hz);
 	if (ret)
 		return ret;
 
 	/* if we are restricted, then return to "normal" mode */
-	mode = (val & CAN_CON_OPMOD_MASK) >> CAN_CON_OPMOD_SHIFT;
 	if ( mode == CAN_CON_MODE_RESTRICTED) {
-		dev_dbg(&spi->dev, "Moving out of RESTRICTED mode\n");
-		ret = mcp2517fd_cmd_write_mask(
-			spi, CAN_CON,
-			priv->regs.con,
-			CAN_CON_REQOP_MASK,
-			priv->spi_speed_hz);
+		ret = mcp2517fd_set_normal_opmode(spi);
 		if (ret)
 			return ret;
 	}
@@ -2396,11 +2463,45 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	priv->can_err_id |= CAN_ERR_CRTL;
 	priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
 
-	/* a mode change or ecc error would indicate TX MAB Undeflow */
-	if (priv->status.intf & (CAN_INT_MODIF | CAN_INT_ECCIF))
+	/* a mode change + invalid message would indicate
+	 * TX MAB Underflow
+	 */
+	if ((priv->status.intf & CAN_INT_MODIF) &&
+	    (priv->status.intf & CAN_INT_IVMIF)) {
+		priv->int_clear_mask |= CAN_INT_IVMIF | CAN_INT_MODIF;
 		return mcp2517fd_can_ist_handle_serrif_txmab(spi);
-	else
+	}
+
+	/* TODO: there are some specific conditions here as well */
+	if (0) {
+		priv->int_clear_mask |= 0;
 		return mcp2517fd_can_ist_handle_serrif_rxmab(spi);
+	}
+
+	/* the final case */
+	dev_warn_ratelimited(&spi->dev,
+			     "unidentified system error - intf =  %08x\n",
+			     priv->status.intf);
+
+	return 0;
+}
+
+static int mcp2517fd_can_ist_handle_ivmif(struct spi_device *spi) {
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
+	priv->int_clear_mask |= CAN_INT_IVMIF;
+
+	/* if we have a systemerror as well, then ignore it */
+	if (priv->status.intf & CAN_INT_SERRIF)
+		return 0;
+
+	/* otherwise it is an RX issue, so account for it here */
+	priv->can_err_id |= CAN_ERR_PROT;
+	priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
+	priv->net->stats.rx_frame_errors++;
+	priv->net->stats.rx_errors++;
+
+	return 0;
 }
 
 static int mcp2517fd_disable_interrupts(struct spi_device *spi,
@@ -2443,7 +2544,8 @@ static int mcp2517fd_hw_wake(struct spi_device *spi)
 
 	/* write clock */
 	ret = mcp2517fd_cmd_write(
-		spi, MCP2517FD_OSC, priv->regs.osc,
+		spi, MCP2517FD_OSC,
+		priv->regs.osc,
 		priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
@@ -2460,6 +2562,8 @@ static int mcp2517fd_hw_wake(struct spi_device *spi)
 			priv->active_can_mode = CAN_CON_MODE_CONFIG;
 			return 0;
 		}
+		/* wait some time */
+		mdelay(100);
 	}
 
 	dev_err(&spi->dev,
@@ -2473,27 +2577,9 @@ static void mcp2517fd_hw_sleep(struct spi_device *spi)
 
 	/* disable interrupts */
 	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
-
-	priv->active_can_mode = CAN_CON_MODE_SLEEP;
-	priv->regs.con = (priv->regs.con & ~CAN_CON_REQOP_MASK) |
-		(priv->active_can_mode << CAN_CON_REQOP_SHIFT);
-	mcp2517fd_cmd_write(spi, CAN_CON,
-			    priv->regs.con,
-			    priv->spi_setup_speed_hz);
-}
-
-static void mcp2517fd_wake_queue(struct spi_device *spi)
-{
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-
-	/* nothing should be left pending /in flight now... */
-	priv->fifos.tx_pending_mask = 0;
-	priv->fifos.tx_submitted_mask = 0;
-	priv->fifos.tx_processed_mask = 0;
-	priv->tx_queue_status = TX_QUEUE_STATUS_RUNNING;
-
-	/* wake queue now */
-	netif_wake_queue(priv->net);
+	/* set the mode */
+	mcp2517fd_set_opmode(spi, CAN_CON_MODE_SLEEP,
+			     priv->spi_setup_speed_hz);
 }
 
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
@@ -2548,6 +2634,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* process the queued fifos */
 	ret = mcp2517fd_process_queued_fifos(spi);
 
+
 	/* restart the tx queue if needed */
 	if (priv->tx_queue_status == TX_QUEUE_STATUS_NEEDS_START)
 		mcp2517fd_wake_queue(spi);
@@ -2575,11 +2662,9 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* message format interrupt */
 	if (priv->status.intf & CAN_INT_IVMIF) {
-		priv->can_err_id |= CAN_ERR_PROT;
-		priv->can_err_data[2] |= CAN_ERR_PROT_FORM;
-		priv->int_clear_mask |= CAN_INT_IVMIF;
-		priv->net->stats.rx_frame_errors++;
-		priv->net->stats.rx_errors++;
+		ret = mcp2517fd_can_ist_handle_ivmif(spi);
+		if (ret)
+			return ret;
 	}
 
 	/* handle bus errors in more detail */
@@ -2639,7 +2724,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* handle BUS OFF */
 	if (priv->can.state == CAN_STATE_BUS_OFF) {
 		if (priv->can.restart_ms == 0) {
-			netif_stop_queue(priv->net);
+			mcp2517fd_stop_queue(priv->net);
 			priv->force_quit = 1;
 			priv->can.can_stats.bus_off++;
 			can_bus_off(priv->net);
@@ -2796,7 +2881,6 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 static int mcp2517fd_hw_probe(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u32 val;
 	int ret;
 
 	/* Wait for oscillator startup timer after power up */
@@ -2809,16 +2893,20 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	mdelay(MCP2517FD_OST_DELAY_MS);
 
 	/* check clock register that the clock is ready or disabled */
-	ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC, &val,
+	ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+				 &priv->regs.osc,
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
 	/* there can only be one... */
-	switch (val & (MCP2517FD_OSC_OSCRDY | MCP2517FD_OSC_OSCDIS)) {
+	switch (priv->regs.osc &
+		(MCP2517FD_OSC_OSCRDY | MCP2517FD_OSC_OSCDIS)) {
 	case MCP2517FD_OSC_OSCRDY: /* either the clock is ready */
 		break;
 	case MCP2517FD_OSC_OSCDIS: /* or the clock is disabled */
+		/* clear the disable bit */
+		priv->regs.osc &= ~MCP2517FD_OSC_OSCDIS;
 		/* wakeup sleeping system */
 		ret = mcp2517fd_hw_wake(spi);
 		if (ret)
@@ -2838,7 +2926,8 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 		 * (enabling pll, when when on wrong clock), so best warn
 		 * about such a possibility
 		 */
-		if ((val & (MCP2517FD_OSC_PLLEN | MCP2517FD_OSC_PLLRDY))
+		if ((priv->regs.osc &
+		     (MCP2517FD_OSC_PLLEN | MCP2517FD_OSC_PLLRDY))
 		    == MCP2517FD_OSC_PLLEN)
 			dev_err(&spi->dev,
 				"mcp2517fd may be in a strange state - a power disconnect may be required\n");
@@ -2849,14 +2938,17 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	/* check if we are in config mode already*/
 
 	/* read CON register and match */
-	ret = mcp2517fd_cmd_read(spi, CAN_CON, &val,
+	ret = mcp2517fd_cmd_read(spi, CAN_CON,
+				 &priv->regs.con,
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
 	/* apply mask and check */
-	if ((val & CAN_CON_DEFAULT_MASK) == CAN_CON_DEFAULT)
+	if ((priv->regs.con & CAN_CON_DEFAULT_MASK) == CAN_CON_DEFAULT) {
+		priv->active_can_mode = CAN_CON_MODE_CONFIG;
 		return 0;
+	}
 
 	/* as per datasheet a reset only works in Config Mode
 	 * so as we have in principle no knowledge of the current
@@ -2869,6 +2961,8 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	 */
 
 	/* blindly force it into config mode */
+	priv->regs.con = CAN_CON_DEFAULT;
+	priv->active_can_mode = CAN_CON_MODE_CONFIG;
 	ret = mcp2517fd_cmd_write(spi, CAN_CON, CAN_CON_DEFAULT,
 				  priv->spi_setup_speed_hz);
 	if (ret)
@@ -2884,50 +2978,20 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	mdelay(MCP2517FD_OST_DELAY_MS);
 
 	/* read CON register and match a final time */
-	ret = mcp2517fd_cmd_read(spi, CAN_CON, &val,
+	ret = mcp2517fd_cmd_read(spi, CAN_CON,
+				 &priv->regs.con,
 				 priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
-	/* just allow dumping the register if we ever get here */
-	dev_dbg(&spi->dev, "read CAN_CON = 0x%08x\n", val);
-
 	/* apply mask and check */
-	if ((val & CAN_CON_DEFAULT_MASK) != CAN_CON_DEFAULT)
+	if ((priv->regs.con & CAN_CON_DEFAULT_MASK) != CAN_CON_DEFAULT) {
 		return -ENODEV;
+	}
 
 	/* just in case: disable interrupts on controller */
 	return mcp2517fd_disable_interrupts(spi,
 					    priv->spi_setup_speed_hz);
-}
-
-static int mcp2517fd_set_normal_mode(struct spi_device *spi)
-{
-	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	int ret;
-
-	if (priv->can.ctrlmode & CAN_CTRLMODE_LOOPBACK)
-		priv->active_can_mode = CAN_CON_MODE_EXTERNAL_LOOPBACK;
-	else if (priv->can.ctrlmode & CAN_CTRLMODE_LISTENONLY)
-		priv->active_can_mode = CAN_CON_MODE_LISTENONLY;
-	else if (priv->can.ctrlmode & CAN_CTRLMODE_FD)
-		priv->active_can_mode = CAN_CON_MODE_MIXED;
-	else
-		priv->active_can_mode = CAN_CON_MODE_CAN2_0;
-
-	/* set mode to normal */
-	priv->regs.con = (priv->regs.con & ~CAN_CON_REQOP_MASK) |
-		(priv->active_can_mode << CAN_CON_REQOP_SHIFT);
-
-	ret = mcp2517fd_cmd_write(spi, CAN_CON,
-				  priv->regs.con,
-				  priv->spi_setup_speed_hz);
-	if (ret)
-		return ret;
-
-	priv->can.state = CAN_STATE_ERROR_ACTIVE;
-
-	return 0;
 }
 
 static int mcp2517fd_setup_osc(struct spi_device *spi)
@@ -3000,7 +3064,6 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 				struct mcp2517fd_priv *priv,
 				struct spi_device *spi)
 {
-	u32 con_val = priv->regs.con & (~CAN_CON_REQOP_MASK);
 	u32 val, available_memory, tx_memory_used;
 	int ret;
 	int i, fifo;
@@ -3183,10 +3246,8 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* we need to move out of CONFIG mode shortly to get the addresses */
-	ret = mcp2517fd_cmd_write(
-		spi, CAN_CON, con_val |
-		(CAN_CON_MODE_INTERNAL_LOOPBACK << CAN_CON_REQOP_SHIFT),
-		priv->spi_setup_speed_hz);
+	ret = mcp2517fd_set_opmode(spi, CAN_CON_MODE_INTERNAL_LOOPBACK,
+				   priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
@@ -3227,10 +3288,8 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* now get back into config mode */
-	ret = mcp2517fd_cmd_write(
-		spi, CAN_CON, con_val |
-		(CAN_CON_MODE_CONFIG << CAN_CON_REQOP_SHIFT),
-		priv->spi_setup_speed_hz);
+	ret = mcp2517fd_set_opmode(spi, CAN_CON_MODE_CONFIG,
+				   priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
@@ -3333,6 +3392,7 @@ static int mcp2517fd_setup(struct net_device *net,
 
 	/* setup value of con_register */
 	priv->regs.con = CAN_CON_STEF /* enable TEF */;
+
 	/* transmission bandwidth sharing bits */
 	if (bw_sharing_log2bits > 12)
 		bw_sharing_log2bits = 12;
@@ -3343,6 +3403,15 @@ static int mcp2517fd_setup(struct net_device *net,
 	/* one shot */
 	if (priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
 		priv->regs.con |= CAN_CON_RTXAT;
+
+	/* and put us into default mode = CONFIG */
+	priv->regs.con |= (CAN_CON_MODE_CONFIG << CAN_CON_REQOP_SHIFT) |
+		(CAN_CON_MODE_CONFIG << CAN_CON_OPMOD_SHIFT);
+	/* apply it now - later we will only switch opsmodes... */
+	ret = mcp2517fd_cmd_write_mask(spi, CAN_CON,
+				       priv->regs.con,
+				       CAN_CON_REQOP_MASK,
+				       priv->spi_setup_speed_hz);
 
 	/* setup fifos - this also puts the system into sleep mode */
 	return mcp2517fd_setup_fifo(net, priv, spi);
@@ -3400,9 +3469,11 @@ static int mcp2517fd_open(struct net_device *net)
 	mcp2517fd_do_set_nominal_bittiming(net);
 	mcp2517fd_do_set_data_bittiming(net);
 
-	ret = mcp2517fd_set_normal_mode(spi);
+	ret = mcp2517fd_set_normal_opmode(spi);
 	if (ret)
 		goto open_clean;
+	/* setting up default state */
+	priv->can.state = CAN_STATE_ERROR_ACTIVE;
 
 	/* only now enable the interrupt on the controller */
 	ret =  mcp2517fd_enable_interrupts(spi,
