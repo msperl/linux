@@ -2467,6 +2467,8 @@ static int mcp2517fd_can_ist_handle_serrif_rxmab(struct spi_device *spi)
 	priv->net->stats.rx_errors++;
 	priv->stats.rx_mab++;
 
+	mdelay(200);
+
 	return 0;
 }
 
@@ -2520,10 +2522,11 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 		return mcp2517fd_can_ist_handle_serrif_txmab(spi);
 	}
 
-	/* TODO: there are some specific conditions here as well */
-	if (0) {
+	/* for RX there is only the RXIF an indicator
+	 * - surprizingly RX-MAB does not change mode or anything
+	 */
+	if (priv->status.intf & CAN_INT_RXIF)
 		return mcp2517fd_can_ist_handle_serrif_rxmab(spi);
-	}
 
 	/* the final case */
 	dev_warn_ratelimited(&spi->dev,
