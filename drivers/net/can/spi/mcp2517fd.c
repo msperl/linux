@@ -842,6 +842,7 @@ struct mcp2517fd_priv {
 		u32 tx_fifo_mask; /* bitmask of which fifo is a tx fifo */
 		u32 tx_submitted_mask;
 		u32 tx_pending_mask;
+		u32 tx_pending_mask_in_irq;
 		u32 tx_processed_mask;
 
 		/* info on rx_fifos */
@@ -2058,7 +2059,6 @@ static int mcp2517fd_can_ist_handle_tefif_handle_single(
 				   */
 				  sizeof(*tef) - 1,
                                   priv->spi_speed_hz);
-
         /* increment the counter to read next */
         ret = mcp2517fd_cmd_write_mask(spi,
                                        CAN_TEFCON,
@@ -2109,10 +2109,13 @@ static int mcp2517fd_can_ist_handle_tefif_conservative(struct spi_device *spi)
                 if (!(val[0] & CAN_TEFSTA_TEFNEIF))
                         return 0;
 
-                /* handle a single TEF taking the address we read
-                 * not the computed version
-                 */
-                priv->fifos.tef_address = val[1];
+		if (priv->fifos.tef_address != val[1]) {
+			dev_err(&spi->dev,
+				"TEF Address missmatch - read: %04x calculated: %04x\n",
+				val[1], priv->fifos.tef_address);
+			priv->fifos.tef_address = val[1];
+		}
+
                 ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
                 if (ret)
                         return ret;
@@ -2130,6 +2133,39 @@ static int mcp2517fd_can_ist_handle_tefif_count(struct spi_device *spi,
         /* now clear TEF for each */
         /* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
         for (i = 0; i < count; i++) {
+#if 0
+		/* for Debug and validation purposes */
+		struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+		u32 val[2];
+
+		/* get the current TEFSTA and TEFUA */
+                ret = mcp2517fd_cmd_readn(priv->spi,
+                                          CAN_TEFSTA,
+                                          val,
+                                          8,
+                                          priv->spi_speed_hz);
+                if (ret)
+                        return ret;
+                mcp2517fd_convert_to_cpu(val, 2);
+
+                /* check for interrupt flags */
+                if (!(val[0] & CAN_TEFSTA_TEFNEIF)) {
+			dev_err(&spi->dev,
+				"we got no mor tef, but we still should read %i computed tefs\n",
+				count - i);
+			return 0;
+		}
+
+                /* handle a single TEF taking the address we read
+                 * not the computed version
+                 */
+		if (priv->fifos.tef_address != val[1]) {
+			dev_err(&spi->dev,
+				"TEF Address missmatch - read: %04x calculated: %04x\n",
+				val[1], priv->fifos.tef_address);
+			priv->fifos.tef_address = val[1];
+		}
+#endif
                 /* handle a single TEF */
                 ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
                 if (ret)
@@ -2142,19 +2178,13 @@ static int mcp2517fd_can_ist_handle_tefif_count(struct spi_device *spi,
 static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
         struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-        u32 pending = priv->fifos.tx_pending_mask &
+        u32 pending = priv->fifos.tx_pending_mask_in_irq &
                 (~priv->fifos.tx_processed_mask);
         int count;
 
         /* calculate the number of fifos that have been processed */
         count = hweight_long(pending);
-        count -= hweight_long(priv->status.txreq);
-
-#if 0
-        /* after a System Error we take the long route... */
-        if (priv->status.intf & CAN_INT_SERRIF)
-                return mcp2517fd_can_ist_handle_tefif_conservative(spi);
-#endif
+        count -= hweight_long(priv->status.txreq & pending);
 
         /* in case of unexpected results handle "safely" */
         if (count <= 0)
@@ -2654,11 +2684,6 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	/* process the queued fifos */
 	ret = mcp2517fd_process_queued_fifos(spi);
 
-
-	/* restart the tx queue if needed */
-	if (priv->tx_queue_status == TX_QUEUE_STATUS_NEEDS_START)
-		mcp2517fd_wake_queue(spi);
-
 	/* handle error interrupt flags */
 	if (priv->status.rxovif) {
 		ret = mcp2517fd_can_ist_handle_rxovif(spi);
@@ -2750,9 +2775,13 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 			can_bus_off(priv->net);
 			mcp2517fd_hw_sleep(spi);
 		}
+	} else {
+		/* restart the tx queue if needed */
+		if (priv->fifos.tx_processed_mask == priv->fifos.tx_fifo_mask)
+			mcp2517fd_wake_queue(spi);
 	}
 
-	/* clear int flags */
+	/* clear bdiag flags */
 	if (priv->bdiag1_clear_mask) {
 		ret = mcp2517fd_cmd_write_mask(spi,
 					       CAN_BDIAG1,
@@ -2778,6 +2807,13 @@ static irqreturn_t mcp2517fd_can_ist(int irq, void *dev_id)
 	while (!priv->force_quit) {
 		/* count irq loops */
 		priv->stats.irq_loops++;
+
+		/* copy pending to in_irq - any
+		 * updates that happen asyncronously
+		 * are not taken into account here
+		 */
+		priv->fifos.tx_pending_mask_in_irq =
+			priv->fifos.tx_pending_mask;
 
 		/* read interrupt status flags */
 		ret = mcp2517fd_cmd_readn(spi, CAN_INT,
@@ -3423,10 +3459,9 @@ static int mcp2517fd_setup(struct net_device *net,
 	priv->regs.con |= (CAN_CON_MODE_CONFIG << CAN_CON_REQOP_SHIFT) |
 		(CAN_CON_MODE_CONFIG << CAN_CON_OPMOD_SHIFT);
 	/* apply it now - later we will only switch opsmodes... */
-	ret = mcp2517fd_cmd_write_mask(spi, CAN_CON,
-				       priv->regs.con,
-				       CAN_CON_REQOP_MASK,
-				       priv->spi_setup_speed_hz);
+	ret = mcp2517fd_cmd_write(spi, CAN_CON,
+				  priv->regs.con,
+				  priv->spi_setup_speed_hz);
 
 	/* setup fifos - this also puts the system into sleep mode */
 	return mcp2517fd_setup_fifo(net, priv, spi);
