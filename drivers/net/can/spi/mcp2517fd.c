@@ -829,6 +829,7 @@ struct mcp2517fd_priv {
 		u32 payload_mode;
 
 		/* TEF addresses - start, end and current */
+		u32 tef_fifos;
 		u32 tef_address_start;
 		u32 tef_address_end;
 		u32 tef_address;
@@ -970,6 +971,10 @@ unsigned int bw_sharing_log2bits;
 module_param(bw_sharing_log2bits, uint, 0664);
 MODULE_PARM_DESC(bw_sharing_log2bits,
 		 "Delay between 2 transmissions in number of arbitration bit times\n");
+bool three_shot;
+module_param(three_shot, bool, 0664);
+MODULE_PARM_DESC(three_shot,
+		 "Use 3 shots when one-shot is requested");
 
 /* spi sync helper */
 
@@ -2448,6 +2453,8 @@ static int mcp2517fd_can_ist_handle_serrif_txmab(struct spi_device *spi)
 	priv->net->stats.tx_errors++;
 	priv->stats.tx_mab++;
 
+	mdelay(100);
+
 	return 0;
 }
 
@@ -3214,6 +3221,21 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	if (priv->fifos.tx_fifos + priv->fifos.rx_fifos > 31)
 		priv->fifos.rx_fifos = 31 - priv->fifos.tx_fifos;
 
+	/* calculate effective memory used */
+	available_memory -= priv->fifos.rx_fifos *
+		(sizeof(struct mcp2517fd_obj_rx) +
+		 priv->fifos.payload_size) *
+		priv->fifos.rx_fifo_depth;
+
+	/* calcluate tef size */
+	priv->fifos.tef_fifos = priv->fifos.tef_fifos;
+	fifo = available_memory / sizeof(struct mcp2517fd_obj_tef);
+	if (fifo > 0) {
+		priv->fifos.tef_fifos += fifo;
+		if (priv->fifos.tef_fifos > 32)
+			priv->fifos.tef_fifos = 32;
+	}
+
 	/* calculate rx/tx fifo start */
 	priv->fifos.rx_fifo_start = 1;
 	priv->fifos.tx_fifo_start =
@@ -3223,7 +3245,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	priv->regs.tefcon = CAN_TEFCON_FRESET |
 		CAN_TEFCON_TEFNEIE |
 		CAN_TEFCON_TEFTSEN |
-		((priv->fifos.tx_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT),
+		((priv->fifos.tef_fifos - 1) << CAN_TEFCON_FSIZE_SHIFT),
 
 	ret = mcp2517fd_cmd_write(
 		spi, CAN_TEFCON,
@@ -3240,8 +3262,12 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		(0 << CAN_FIFOCON_FSIZE_SHIFT); /* 1 FIFO only */
 
 	if (priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT)
-		val |= CAN_FIFOCON_TXAT_ONE_SHOT <<
-			CAN_FIFOCON_TXAT_SHIFT;
+		if (three_shot)
+			val |= CAN_FIFOCON_TXAT_THREE_SHOT <<
+				CAN_FIFOCON_TXAT_SHIFT;
+		else
+			val |= CAN_FIFOCON_TXAT_ONE_SHOT <<
+				CAN_FIFOCON_TXAT_SHIFT;
 	else
 		val |= CAN_FIFOCON_TXAT_UNLIMITED <<
 			CAN_FIFOCON_TXAT_SHIFT;
@@ -3310,7 +3336,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	priv->fifos.tef_address = val;
 	priv->fifos.tef_address_start = val;
 	priv->fifos.tef_address_end = priv->fifos.tef_address_start +
-		(priv->fifos.tx_fifos) * sizeof(struct mcp2517fd_obj_tef) -
+		priv->fifos.tef_fifos * sizeof(struct mcp2517fd_obj_tef) -
 		1;
 
 	/* get all the relevant addresses for the transmit fifos */
@@ -3359,8 +3385,10 @@ static int mcp2517fd_setup(struct net_device *net,
 	if (ret)
 		return ret;
 
-	/* set up RAM ECC (but for now without interrupts) */
-	priv->regs.ecccon = MCP2517FD_ECCCON_ECCEN;
+	/* set up RAM ECC */
+	priv->regs.ecccon = MCP2517FD_ECCCON_ECCEN |
+		MCP2517FD_ECCCON_SECIE |
+		MCP2517FD_ECCCON_DEDIE;
 	ret = mcp2517fd_cmd_write(spi, MCP2517FD_ECCCON,
 				  priv->regs.ecccon,
 				  priv->spi_setup_speed_hz);
@@ -3622,21 +3650,38 @@ static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
 {
 	struct spi_device *spi = file->private;
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u8 data[CAN_FIFOCON(0)];
+	u8 data[CAN_TXQUA + 4];
 	int i;
+	int count;
 	int ret;
 
-	ret = mcp2517fd_cmd_readn(spi, 0, data, sizeof(data),
+	count = (CAN_TXQUA - CAN_CON) / 4 + 1;
+	ret = mcp2517fd_cmd_readn(spi, CAN_CON, data, 4 * count,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
-	mcp2517fd_convert_to_cpu((u32*)data, ARRAY_SIZE(data));
+	mcp2517fd_convert_to_cpu((u32*)data, 4 * count);
 
-	for(i = 0; i < sizeof(data); i += 4) {
-		seq_printf(file, "Reg 0x%02x = 0x%08x\n",
-			   i, *((u32*)(data + i)));
+	for(i = 0; i < count; i++) {
+		seq_printf(file, "Reg 0x%03x = 0x%08x\n",
+			   CAN_CON + 4 * i,
+			   ((u32*)data)[i]);
 	}
+
+	count = (MCP2517FD_ECCSTAT - MCP2517FD_OSC) / 4 + 1;
+	ret = mcp2517fd_cmd_readn(spi, MCP2517FD_OSC, data, 4 * count,
+				  priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+	mcp2517fd_convert_to_cpu((u32*)data, 4 * count);
+
+	for(i = 0; i < count; i++) {
+		seq_printf(file, "Reg 0x%03x = 0x%08x\n",
+			   MCP2517FD_OSC + 4 * i,
+			   ((u32*)data)[i]);
+	}
+
 
 	return 0;
 }
@@ -3720,6 +3765,9 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->tx_queue_status);
 	debugfs_create_u64("tx_mab", 0444, tx,
 			   &priv->stats.tx_mab);
+
+	debugfs_create_u32("tef_count", 0444, tx,
+			   &priv->fifos.tef_fifos);
 
 	debugfs_create_u32("fifo_max_payload_size", 0444, root,
 			   &priv->fifos.payload_size);
