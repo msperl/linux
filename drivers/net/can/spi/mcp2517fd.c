@@ -2712,6 +2712,14 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 			return ret;
 	}
 
+	/* mode change interrupt */
+	if (priv->status.intf & CAN_INT_MODIF) {
+		priv->stats.int_mod_count++;
+		ret = mcp2517fd_can_ist_handle_modif(spi);
+		if (ret)
+			return ret;
+	}
+
 	/* handle the rx */
 	if (priv->status.intf & CAN_INT_RXIF) {
 		priv->stats.int_rx_count++;
@@ -2743,14 +2751,6 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	if (priv->status.rxovif) {
 		priv->stats.int_rxov_count++;
 		ret = mcp2517fd_can_ist_handle_rxovif(spi);
-		if (ret)
-			return ret;
-	}
-
-	/* mode change erros */
-	if (priv->status.intf & CAN_INT_MODIF) {
-		priv->stats.int_mod_count++;
-		ret = mcp2517fd_can_ist_handle_modif(spi);
 		if (ret)
 			return ret;
 	}
