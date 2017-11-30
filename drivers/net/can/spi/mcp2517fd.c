@@ -888,6 +888,22 @@ struct mcp2517fd_priv {
 		/* message counter fd bit rate switch */
 		u64 rx_brs_count;
 		u64 tx_brs_count;
+
+		/* interrupt counter */
+		u64 int_ivm_count;
+		u64 int_wake_count;
+		u64 int_cerr_count;
+		u64 int_serr_count;
+		u64 int_rxov_count;
+		u64 int_txat_count;
+		u64 int_spicrc_count;
+		u64 int_ecc_count;
+		u64 int_tef_count;
+		u64 int_mod_count;
+		u64 int_tbc_count;
+		u64 int_rx_count;
+		u64 int_tx_count;
+
 	} stats;
 
 	/* the current status of the mcp2517fd */
@@ -2682,6 +2698,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 	 * to get us out of restricted mode
 	 */
 	if (priv->status.intf & CAN_INT_SERRIF) {
+		priv->stats.int_serr_count++;
 		ret = mcp2517fd_can_ist_handle_serrif(spi);
 		if (ret)
 			return ret;
@@ -2689,6 +2706,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* handle the rx */
 	if (priv->status.intf & CAN_INT_RXIF) {
+		priv->stats.int_rx_count++;
 		ret = mcp2517fd_can_ist_handle_rxif(spi);
 		if (ret)
 			return ret;
@@ -2696,6 +2714,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* handle aborted TX FIFOs */
 	if (priv->status.txatif) {
+		priv->stats.int_txat_count++;
 		ret = mcp2517fd_can_ist_handle_txatif(spi);
 		if (ret)
 			return ret;
@@ -2703,6 +2722,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* handle the tef */
 	if (priv->status.intf & CAN_INT_TEFIF) {
+		priv->stats.int_tef_count++;
 		ret = mcp2517fd_can_ist_handle_tefif(spi);
 		if (ret)
 			return ret;
@@ -2713,6 +2733,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* handle error interrupt flags */
 	if (priv->status.rxovif) {
+		priv->stats.int_rxov_count++;
 		ret = mcp2517fd_can_ist_handle_rxovif(spi);
 		if (ret)
 			return ret;
@@ -2720,6 +2741,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* mode change erros */
 	if (priv->status.intf & CAN_INT_MODIF) {
+		priv->stats.int_mod_count++;
 		ret = mcp2517fd_can_ist_handle_modif(spi);
 		if (ret)
 			return ret;
@@ -2727,6 +2749,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* sram ECC error interrupt */
 	if (priv->status.intf & CAN_INT_ECCIF) {
+		priv->stats.int_ecc_count++;
 		ret = mcp2517fd_can_ist_handle_eccif(spi);
 		if (ret)
 			return ret;
@@ -2734,6 +2757,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* message format interrupt */
 	if (priv->status.intf & CAN_INT_IVMIF) {
+		priv->stats.int_ivm_count++;
 		ret = mcp2517fd_can_ist_handle_ivmif(spi);
 		if (ret)
 			return ret;
@@ -2741,6 +2765,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 
 	/* handle bus errors in more detail */
 	if (priv->status.intf & CAN_INT_CERRIF) {
+		priv->stats.int_cerr_count++;
 		ret = mcp2517fd_can_ist_handle_cerrif(spi);
 		if (ret)
 			return ret;
@@ -3706,7 +3731,8 @@ static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
 static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 {
 #if defined(CONFIG_DEBUG_FS)
-	struct dentry *root, *fifousage, *fifoaddr, *rx, *tx, *status, *regs;
+	struct dentry *root, *fifousage, *fifoaddr, *rx, *tx, *status,
+		*regs, *stats;
 	char name[32];
 	int i;
 
@@ -3717,10 +3743,11 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 
 	rx = debugfs_create_dir("rx", root);
 	tx = debugfs_create_dir("tx", root);
-	fifousage = debugfs_create_dir("fifo_usage", root);
 	fifoaddr = debugfs_create_dir("fifo_address", root);
 	status = debugfs_create_dir("status", root);
 	regs = debugfs_create_dir("regs", root);
+	stats = debugfs_create_dir("stats", root);
+	fifousage = debugfs_create_dir("fifo_usage", stats);
 
 	/* add spi speed info */
 	debugfs_create_u32("spi_setup_speed_hz", 0444, root,
@@ -3729,18 +3756,16 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->spi_speed_hz);
 
 	/* add irq state info */
-	debugfs_create_u64("irq_calls", 0444, root, &priv->stats.irq_calls);
-	debugfs_create_u64("irq_loops", 0444, root, &priv->stats.irq_loops);
 	debugfs_create_u32("irq_state", 0444, root, &priv->stats.irq_state);
 
 	/* add fd statistics */
-	debugfs_create_u64("rx_fd_frames", 0444, root,
+	debugfs_create_u64("rx_fd_frames", 0444, stats,
 			   &priv->stats.rx_fd_count);
-	debugfs_create_u64("tx_fd_frames", 0444, root,
+	debugfs_create_u64("tx_fd_frames", 0444, stats,
 			   &priv->stats.tx_fd_count);
-	debugfs_create_u64("rx_brs_frames", 0444, root,
+	debugfs_create_u64("rx_brs_frames", 0444, stats,
 			   &priv->stats.rx_brs_count);
-	debugfs_create_u64("tx_brs_frames", 0444, root,
+	debugfs_create_u64("tx_brs_frames", 0444, stats,
 			   &priv->stats.tx_brs_count);
 
 	/* export the status structure */
@@ -3773,7 +3798,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->fifos.rx_fifo_mask);
 	debugfs_create_u64("rx_overflow", 0444, rx,
 			   &priv->stats.rx_overflow);
-	debugfs_create_u64("rx_mab", 0444, rx,
+	debugfs_create_u64("rx_mab", 0444, stats,
 			   &priv->stats.rx_mab);
 
 	debugfs_create_u32("fifo_start", 0444, tx,
@@ -3790,7 +3815,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->fifos.tx_processed_mask);
 	debugfs_create_u32("queue_status", 0444, tx,
 			   &priv->tx_queue_status);
-	debugfs_create_u64("tx_mab", 0444, tx,
+	debugfs_create_u64("tx_mab", 0444, stats,
 			   &priv->stats.tx_mab);
 
 	debugfs_create_u32("tef_count", 0444, tx,
@@ -3799,7 +3824,39 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_u32("fifo_max_payload_size", 0444, root,
 			   &priv->fifos.payload_size);
 
-	/* statistics on fifo buffer usage */
+	/* interrupt statistics */
+	debugfs_create_u64("int", 0444, stats,
+			   &priv->stats.irq_calls);
+	debugfs_create_u64("int_loops", 0444, stats,
+			   &priv->stats.irq_loops);
+	debugfs_create_u64("int_ivm", 0444, stats,
+			   &priv->stats.int_ivm_count);
+	debugfs_create_u64("int_wake", 0444, stats,
+			   &priv->stats.int_wake_count);
+	debugfs_create_u64("int_cerr", 0444, stats,
+			   &priv->stats.int_cerr_count);
+	debugfs_create_u64("int_serr", 0444, stats,
+			   &priv->stats.int_serr_count);
+	debugfs_create_u64("int_rxov", 0444, stats,
+			   &priv->stats.int_rxov_count);
+	debugfs_create_u64("int_txat", 0444, stats,
+			   &priv->stats.int_txat_count);
+	debugfs_create_u64("int_spicrc", 0444, stats,
+			   &priv->stats.int_spicrc_count);
+	debugfs_create_u64("int_ecc", 0444, stats,
+			   &priv->stats.int_ecc_count);
+	debugfs_create_u64("int_tef", 0444, stats,
+			   &priv->stats.int_tef_count);
+	debugfs_create_u64("int_mod", 0444, stats,
+			   &priv->stats.int_mod_count);
+	debugfs_create_u64("int_tbc", 0444, stats,
+			   &priv->stats.int_tbc_count);
+	debugfs_create_u64("int_rx", 0444, stats,
+			   &priv->stats.int_rx_count);
+	debugfs_create_u64("int_tx", 0444, stats,
+			   &priv->stats.int_tx_count);
+
+	/* statistics on fifo buffer usage and address */
 	for (i = 1; i < 32; i++) {
 		snprintf(name, sizeof(name), "%02i", i);
 		debugfs_create_u64(name, 0444, fifousage,
