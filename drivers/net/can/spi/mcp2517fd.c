@@ -1243,6 +1243,26 @@ static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
 	return 0;
 }
 
+static int mcp2517fd_clean_sram(struct spi_device *spi, u32 speed_hz)
+{
+	u8 buffer[256];
+	struct spi_transfer xfer[2];
+	int i;
+	int ret;
+
+	memset(buffer, 0, sizeof(buffer));
+
+	for (i = 0; i < FIFO_DATA_SIZE; i += sizeof(buffer)) {
+		ret = mcp2517fd_cmd_writen(
+			spi, FIFO_DATA(i), buffer, sizeof(buffer),
+			speed_hz);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 /* mcp2517fd opmode helper functions */
 
 static int mcp2517fd_get_opmode(struct spi_device *spi,
@@ -3439,6 +3459,14 @@ static int mcp2517fd_setup(struct net_device *net,
 	ret = mcp2517fd_cmd_write(spi, MCP2517FD_ECCCON,
 				  priv->regs.ecccon,
 				  priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+
+	/* clean SRAM now that we have ECC enabled
+	 * only this case it is clear that all RAM cels have
+	 * valid ECC bits
+	 */
+	ret = mcp2517fd_clean_sram(spi, priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
