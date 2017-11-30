@@ -1336,9 +1336,10 @@ static void __mcp2517fd_stop_queue(struct net_device *net,
 	priv->tx_queue_status = id ? id : TX_QUEUE_STATUS_STOPPED;
 	netif_stop_queue(priv->net);
 }
+
 /* helper to identify who is stopping the queue by line number */
 #define mcp2517fd_stop_queue(spi) \
-	__mcp2517fd_stop_queue(spi,__LINE__);
+	__mcp2517fd_stop_queue(spi, __LINE__)
 
 static void mcp2517fd_wake_queue(struct spi_device *spi)
 {
@@ -1495,7 +1496,8 @@ static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 static bool mcp2517fd_is_last_txfifo(struct spi_device *spi,
 				     int fifo)
 {
-        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+
 	return (fifo ==
 		(priv->fifos.tx_fifo_start + priv->fifos.tx_fifos - 1));
 }
@@ -1536,7 +1538,7 @@ static netdev_tx_t mcp2517fd_start_xmit(struct sk_buff *skb,
 	}
 
 	/* if we are the last one, then stop the queue */
-        if (mcp2517fd_is_last_txfifo(spi, fifo))
+	if (mcp2517fd_is_last_txfifo(spi, fifo))
 		mcp2517fd_stop_queue(priv->net);
 
 	/* mark as submitted */
@@ -2033,173 +2035,173 @@ static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
 static void mcp2517fd_mark_tx_processed(struct spi_device *spi,
 					int fifo)
 {
-        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
-        /* set mask */
-        priv->fifos.tx_processed_mask |= BIT(fifo);
+	/* set mask */
+	priv->fifos.tx_processed_mask |= BIT(fifo);
 
-        /* check if we should reenable the TX-queue */
-        if (mcp2517fd_is_last_txfifo(spi, fifo))
-                priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
+	/* check if we should reenable the TX-queue */
+	if (mcp2517fd_is_last_txfifo(spi, fifo))
+		priv->tx_queue_status = TX_QUEUE_STATUS_NEEDS_START;
 }
 
 static int mcp2517fd_can_ist_handle_tefif_handle_single(
-        struct spi_device *spi)
+	struct spi_device *spi)
 {
-        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-        struct mcp2517fd_obj_tef *tef;
-        int fifo;
-        int ret;
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	struct mcp2517fd_obj_tef *tef;
+	int fifo;
+	int ret;
 
-        /* calc address in address space */
-        tef = (struct mcp2517fd_obj_tef *)(priv->fifos.fifo_data +
-                                           priv->fifos.tef_address);
+	/* calc address in address space */
+	tef = (struct mcp2517fd_obj_tef *)(priv->fifos.fifo_data +
+					   priv->fifos.tef_address);
 
-        /* read all the object data */
-        ret = mcp2517fd_cmd_readn(spi,
-                                  FIFO_DATA(priv->fifos.tef_address),
-                                  tef,
+	/* read all the object data */
+	ret = mcp2517fd_cmd_readn(spi,
+				  FIFO_DATA(priv->fifos.tef_address),
+				  tef,
 				  /* we do not read the last byte of the ts
 				   * to avoid MAB issiues
 				   */
 				  sizeof(*tef) - 1,
-                                  priv->spi_speed_hz);
-        /* increment the counter to read next */
-        ret = mcp2517fd_cmd_write_mask(spi,
-                                       CAN_TEFCON,
-                                       CAN_TEFCON_UINC,
-                                       CAN_TEFCON_UINC,
-                                       priv->spi_speed_hz);
+				  priv->spi_speed_hz);
+	/* increment the counter to read next */
+	ret = mcp2517fd_cmd_write_mask(spi,
+				       CAN_TEFCON,
+				       CAN_TEFCON_UINC,
+				       CAN_TEFCON_UINC,
+				       priv->spi_speed_hz);
 
-        /* transform the data to system byte order */
-        mcp2517fd_obj_ts_from_le(&tef->header);
+	/* transform the data to system byte order */
+	mcp2517fd_obj_ts_from_le(&tef->header);
 
-        fifo = (tef->header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
-                CAN_OBJ_FLAGS_SEQ_SHIFT;
+	fifo = (tef->header.flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
+		CAN_OBJ_FLAGS_SEQ_SHIFT;
 
-        /* submit to queue */
-        tef->header.flags |= CAN_OBJ_FLAGS_CUSTOM_ISTEF;
-        mcp2517fd_addto_queued_fifos(spi, &tef->header);
+	/* submit to queue */
+	tef->header.flags |= CAN_OBJ_FLAGS_CUSTOM_ISTEF;
+	mcp2517fd_addto_queued_fifos(spi, &tef->header);
 
-        /* increment tef_address with rollover */
-        priv->fifos.tef_address += sizeof(*tef);
-        if (priv->fifos.tef_address > priv->fifos.tef_address_end)
-                priv->fifos.tef_address =
-                        priv->fifos.tef_address_start;
+	/* increment tef_address with rollover */
+	priv->fifos.tef_address += sizeof(*tef);
+	if (priv->fifos.tef_address > priv->fifos.tef_address_end)
+		priv->fifos.tef_address =
+			priv->fifos.tef_address_start;
 
-        /* and mark as processed right now */
-        mcp2517fd_mark_tx_processed(spi, fifo);
+	/* and mark as processed right now */
+	mcp2517fd_mark_tx_processed(spi, fifo);
 
-        return 0;
+	return 0;
 }
 
 static int mcp2517fd_can_ist_handle_tefif_conservative(struct spi_device *spi)
 {
-        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-        u32 val[2];
-        int ret;
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 val[2];
+	int ret;
 
-        while (1) {
-                /* get the current TEFSTA and TEFUA */
-                ret = mcp2517fd_cmd_readn(priv->spi,
-                                          CAN_TEFSTA,
-                                          val,
-                                          8,
-                                          priv->spi_speed_hz);
-                if (ret)
-                        return ret;
-                mcp2517fd_convert_to_cpu(val, 2);
+	while (1) {
+		/* get the current TEFSTA and TEFUA */
+		ret = mcp2517fd_cmd_readn(priv->spi,
+					  CAN_TEFSTA,
+					  val,
+					  8,
+					  priv->spi_speed_hz);
+		if (ret)
+			return ret;
+		mcp2517fd_convert_to_cpu(val, 2);
 
-                /* check for interrupt flags */
-                if (!(val[0] & CAN_TEFSTA_TEFNEIF))
-                        return 0;
+		/* check for interrupt flags */
+		if (!(val[0] & CAN_TEFSTA_TEFNEIF))
+			return 0;
 
 		if (priv->fifos.tef_address != val[1]) {
 			dev_err(&spi->dev,
-				"TEF Address missmatch - read: %04x calculated: %04x\n",
+				"TEF Address mismatch - read: %04x calculated: %04x\n",
 				val[1], priv->fifos.tef_address);
 			priv->fifos.tef_address = val[1];
 		}
 
-                ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
-                if (ret)
-                        return ret;
-        }
+		ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
+		if (ret)
+			return ret;
+	}
 
-        return 0;
+	return 0;
 }
 
 static int mcp2517fd_can_ist_handle_tefif_count(struct spi_device *spi,
-                                                int count)
+						int count)
 {
-        int i;
-        int ret;
+	int i;
+	int ret;
 
-        /* now clear TEF for each */
-        /* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
-        for (i = 0; i < count; i++) {
+	/* now clear TEF for each */
+	/* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
+	for (i = 0; i < count; i++) {
 #if 0
 		/* for Debug and validation purposes */
 		struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 		u32 val[2];
 
 		/* get the current TEFSTA and TEFUA */
-                ret = mcp2517fd_cmd_readn(priv->spi,
-                                          CAN_TEFSTA,
-                                          val,
-                                          8,
-                                          priv->spi_speed_hz);
-                if (ret)
-                        return ret;
-                mcp2517fd_convert_to_cpu(val, 2);
+		ret = mcp2517fd_cmd_readn(priv->spi,
+					  CAN_TEFSTA,
+					  val,
+					  8,
+					  priv->spi_speed_hz);
+		if (ret)
+			return ret;
+		mcp2517fd_convert_to_cpu(val, 2);
 
-                /* check for interrupt flags */
-                if (!(val[0] & CAN_TEFSTA_TEFNEIF)) {
+		/* check for interrupt flags */
+		if (!(val[0] & CAN_TEFSTA_TEFNEIF)) {
 			dev_err(&spi->dev,
 				"we got no mor tef, but we still should read %i computed tefs\n",
 				count - i);
 			return 0;
 		}
 
-                /* handle a single TEF taking the address we read
-                 * not the computed version
-                 */
+		/* handle a single TEF taking the address we read
+		 * not the computed version
+		 */
 		if (priv->fifos.tef_address != val[1]) {
 			dev_err(&spi->dev,
-				"TEF Address missmatch - read: %04x calculated: %04x\n",
+				"TEF Address mismatch - read: %04x calculated: %04x\n",
 				val[1], priv->fifos.tef_address);
 			priv->fifos.tef_address = val[1];
 		}
 #endif
-                /* handle a single TEF */
-                ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
-                if (ret)
-                        return ret;
-        }
+		/* handle a single TEF */
+		ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
+		if (ret)
+			return ret;
+	}
 
-        return 0;
+	return 0;
 }
 
 static int mcp2517fd_can_ist_handle_tefif(struct spi_device *spi)
 {
-        struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-        u32 pending = priv->fifos.tx_pending_mask_in_irq &
-                (~priv->fifos.tx_processed_mask);
-        int count;
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	u32 pending = priv->fifos.tx_pending_mask_in_irq &
+		(~priv->fifos.tx_processed_mask);
+	int count;
 
-        /* calculate the number of fifos that have been processed */
-        count = hweight_long(pending);
-        count -= hweight_long(priv->status.txreq & pending);
+	/* calculate the number of fifos that have been processed */
+	count = hweight_long(pending);
+	count -= hweight_long(priv->status.txreq & pending);
 
-        /* in case of unexpected results handle "safely" */
-        if (count <= 0)
-                return mcp2517fd_can_ist_handle_tefif_conservative(spi);
+	/* in case of unexpected results handle "safely" */
+	if (count <= 0)
+		return mcp2517fd_can_ist_handle_tefif_conservative(spi);
 
-        return mcp2517fd_can_ist_handle_tefif_count(spi, count);
+	return mcp2517fd_can_ist_handle_tefif_count(spi, count);
 }
 
 static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
-                                               int fifo)
+						int fifo)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	u32 val;
@@ -2231,7 +2233,7 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 	/* and we release it from the echo_skb buffer
 	 * NOTE: this is one place where packet delivery will not
 	 * be ordered, as we do not have any timing information
-	 * when this occured
+	 * when this occurred
 	 */
 	can_get_echo_skb(priv->net, fifo);
 
@@ -2240,15 +2242,13 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 	priv->net->stats.tx_aborted_errors++;
 
 	/* mark the fifo as processed */
-	dev_err(&spi->dev, "TXMAB: %i - %i\n",fifo,priv->tx_queue_status);
 	 mcp2517fd_mark_tx_processed(spi, fifo);
-	dev_err(&spi->dev, "TXMAB:\t after %i\n",priv->tx_queue_status);
 
 	/* handle all the known cases accordingly - ignoring FIFO full */
 	val &= CAN_FIFOSTA_TXABT |
 		CAN_FIFOSTA_TXLARB |
 		CAN_FIFOSTA_TXERR;
-	switch(val) {
+	switch (val) {
 	case CAN_FIFOSTA_TXERR:
 		break;
 	default:
@@ -2269,16 +2269,16 @@ static int mcp2517fd_can_ist_handle_txatif(struct spi_device *spi)
 	int ret;
 
 	/* process all the fifos with that flag set */
-	for(i = 0, fifo = priv->fifos.tx_fifo_start;
+	for (i = 0, fifo = priv->fifos.tx_fifo_start;
 	    i < priv->fifos.tx_fifos; i++, fifo++) {
 		if (priv->status.txatif & BIT(fifo)) {
 			ret = mcp2517fd_can_ist_handle_txatif_fifo(spi, fifo);
 			if (ret)
 				return ret;
 		}
-        }
+	}
 
-        return 0;
+	return 0;
 }
 
 static void mcp2517fd_error_skb(struct net_device *net)
@@ -2476,12 +2476,13 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	int mode;
+	u32 clear;
 	int ret;
 
 	/* clear some interrupts immediately,
 	 * so that we get notified if they happen again
 	 */
-	u32 clear = CAN_INT_SERRIF | CAN_INT_MODIF | CAN_INT_IVMIF;
+	clear = CAN_INT_SERRIF | CAN_INT_MODIF | CAN_INT_IVMIF;
 	ret = mcp2517fd_cmd_write_mask(spi, CAN_INT,
 				       priv->status.intf & (~clear),
 				       clear,
@@ -2495,7 +2496,7 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 		return ret;
 
 	/* if we are restricted, then return to "normal" mode */
-	if ( mode == CAN_CON_MODE_RESTRICTED) {
+	if (mode == CAN_CON_MODE_RESTRICTED) {
 		ret = mcp2517fd_set_normal_opmode(spi);
 		if (ret)
 			return ret;
@@ -2536,7 +2537,8 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 	return 0;
 }
 
-static int mcp2517fd_can_ist_handle_ivmif(struct spi_device *spi) {
+static int mcp2517fd_can_ist_handle_ivmif(struct spi_device *spi)
+{
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
 	/* if we have a systemerror as well, then ignore it */
@@ -2668,7 +2670,7 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 		ret = mcp2517fd_can_ist_handle_serrif(spi);
 		if (ret)
 			return ret;
-       }
+	}
 
 	/* handle the rx */
 	if (priv->status.intf & CAN_INT_RXIF) {
@@ -3042,9 +3044,8 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 		return ret;
 
 	/* apply mask and check */
-	if ((priv->regs.con & CAN_CON_DEFAULT_MASK) != CAN_CON_DEFAULT) {
+	if ((priv->regs.con & CAN_CON_DEFAULT_MASK) != CAN_CON_DEFAULT)
 		return -ENODEV;
-	}
 
 	/* just in case: disable interrupts on controller */
 	return mcp2517fd_disable_interrupts(spi,
@@ -3648,12 +3649,11 @@ static const struct spi_device_id mcp2517fd_id_table[] = {
 };
 MODULE_DEVICE_TABLE(spi, mcp2517fd_id_table);
 
-
 static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
 {
 	struct spi_device *spi = file->private;
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u8 data[CAN_TXQUA + 4];
+	u32 data[CAN_TXQUA - CAN_CON + 4];
 	int i;
 	int count;
 	int ret;
@@ -3664,12 +3664,12 @@ static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
 	if (ret)
 		return ret;
 
-	mcp2517fd_convert_to_cpu((u32*)data, 4 * count);
+	mcp2517fd_convert_to_cpu((u32 *)data, 4 * count);
 
-	for(i = 0; i < count; i++) {
+	for (i = 0; i < count; i++) {
 		seq_printf(file, "Reg 0x%03x = 0x%08x\n",
 			   CAN_CON + 4 * i,
-			   ((u32*)data)[i]);
+			   ((u32 *)data)[i]);
 	}
 
 	count = (MCP2517FD_ECCSTAT - MCP2517FD_OSC) / 4 + 1;
@@ -3677,14 +3677,13 @@ static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
-	mcp2517fd_convert_to_cpu((u32*)data, 4 * count);
+	mcp2517fd_convert_to_cpu((u32 *)data, 4 * count);
 
-	for(i = 0; i < count; i++) {
+	for (i = 0; i < count; i++) {
 		seq_printf(file, "Reg 0x%03x = 0x%08x\n",
 			   MCP2517FD_OSC + 4 * i,
-			   ((u32*)data)[i]);
+			   ((u32 *)data)[i]);
 	}
-
 
 	return 0;
 }
