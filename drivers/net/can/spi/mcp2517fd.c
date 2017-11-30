@@ -1246,7 +1246,6 @@ static int mcp2517fd_cmd_writen(struct spi_device *spi, u32 reg,
 static int mcp2517fd_clean_sram(struct spi_device *spi, u32 speed_hz)
 {
 	u8 buffer[256];
-	struct spi_transfer xfer[2];
 	int i;
 	int ret;
 
@@ -2388,6 +2387,7 @@ static int mcp2517fd_can_ist_handle_rxovif(struct spi_device *spi)
 static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	int omode = priv->active_can_mode;
 	int mode;
 	int ret;
 
@@ -2399,30 +2399,30 @@ static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 	/* get the mode */
 	ret = mcp2517fd_get_opmode(spi, &mode, priv->spi_speed_hz);
 	if (ret)
-		return 0;
+		return ret;
+
+	/* if we are restricted, then return to "normal" mode */
+	if (mode == CAN_CON_MODE_RESTRICTED)
+		return mcp2517fd_set_normal_opmode(spi);
 
 	/* the controller itself will transition to sleep, so we ignore it */
 	if (mode == CAN_CON_MODE_SLEEP)
-		goto out;
+		return 0;
 
 	/* switches to the same mode as before are also ignored
 	 * - this typically happens if the driver is shortly
 	 *   switching to a different mode and then returning to the
 	 *   original mode
 	 */
-	if (mode == priv->active_can_mode)
-		goto out;
+	if (mode == omode)
+		return 0;
 
-	/* these we need to handle correctly */
+	/* these we need to handle correctly, so warn and give context */
 	dev_err(&spi->dev,
 		"Controller switched from mode %s(%u) to %s(%u)\n",
-		mcp2517fd_mode_names[priv->active_can_mode],
-		priv->active_can_mode,
+		mcp2517fd_mode_names[omode], omode,
 		mcp2517fd_mode_names[mode], mode);
 
-	/* finally assign the mode as currently active */
-out:
-	priv->active_can_mode = mode;
 	return 0;
 }
 
@@ -2529,7 +2529,6 @@ static int mcp2517fd_can_ist_handle_serrif_rxmab(struct spi_device *spi)
 static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	int mode;
 	u32 clear;
 	int ret;
 
@@ -2543,18 +2542,6 @@ static int mcp2517fd_can_ist_handle_serrif(struct spi_device *spi)
 				       priv->spi_speed_hz);
 	if (ret)
 		return ret;
-
-	/* check if we are in restricted mode */
-	ret = mcp2517fd_get_opmode(spi, &mode, priv->spi_speed_hz);
-	if (ret)
-		return ret;
-
-	/* if we are restricted, then return to "normal" mode */
-	if (mode == CAN_CON_MODE_RESTRICTED) {
-		ret = mcp2517fd_set_normal_opmode(spi);
-		if (ret)
-			return ret;
-	}
 
 	/* Errors here are:
 	 * * Bus Bandwidth Error: when a RX Message Assembly Buffer
