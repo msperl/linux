@@ -2492,8 +2492,6 @@ static int mcp2517fd_can_ist_handle_serrif_txmab(struct spi_device *spi)
 	priv->net->stats.tx_errors++;
 	priv->stats.tx_mab++;
 
-	mdelay(100);
-
 	return 0;
 }
 
@@ -2501,12 +2499,9 @@ static int mcp2517fd_can_ist_handle_serrif_rxmab(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
-	dev_warn_ratelimited(&spi->dev, "RX MAB overflow\n");
 	priv->net->stats.rx_dropped++;
 	priv->net->stats.rx_errors++;
 	priv->stats.rx_mab++;
-
-	mdelay(200);
 
 	return 0;
 }
