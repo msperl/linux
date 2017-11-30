@@ -880,6 +880,14 @@ struct mcp2517fd_priv {
 		/* message abort counter */
 		u64 rx_mab;
 		u64 tx_mab;
+
+		/* message counter fd */
+		u64 rx_fd_count;
+		u64 tx_fd_count;
+
+		/* message counter fd bit rate switch */
+		u64 rx_brs_count;
+		u64 tx_brs_count;
 	} stats;
 
 	/* the current status of the mcp2517fd */
@@ -1587,8 +1595,11 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 
 	memcpy(frame->data, rx->data, frame->len);
 
+	priv->stats.rx_fd_count++;
 	priv->net->stats.rx_packets++;
 	priv->net->stats.rx_bytes += frame->len;
+	if (rx->header.flags & CAN_OBJ_FLAGS_BRS)
+		priv->stats.rx_brs_count++;
 
 	can_led_event(priv->net, CAN_LED_EVENT_RX);
 
@@ -1777,6 +1788,10 @@ static int mcp2517fd_process_queued_tef(struct spi_device *spi,
 	/* update counters */
 	priv->net->stats.tx_packets++;
 	priv->net->stats.tx_bytes += can_dlc2len(dlc);
+	if (obj->flags & CAN_OBJ_FLAGS_FDF)
+		priv->stats.tx_fd_count++;
+	if (obj->flags & CAN_OBJ_FLAGS_BRS)
+		priv->stats.tx_brs_count++;
 
 	/* release it */
 	can_get_echo_skb(priv->net, fifo);
@@ -3717,6 +3732,16 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_u64("irq_calls", 0444, root, &priv->stats.irq_calls);
 	debugfs_create_u64("irq_loops", 0444, root, &priv->stats.irq_loops);
 	debugfs_create_u32("irq_state", 0444, root, &priv->stats.irq_state);
+
+	/* add fd statistics */
+	debugfs_create_u64("rx_fd_frames", 0444, root,
+			   &priv->stats.rx_fd_count);
+	debugfs_create_u64("tx_fd_frames", 0444, root,
+			   &priv->stats.tx_fd_count);
+	debugfs_create_u64("rx_brs_frames", 0444, root,
+			   &priv->stats.rx_brs_count);
+	debugfs_create_u64("tx_brs_frames", 0444, root,
+			   &priv->stats.tx_brs_count);
 
 	/* export the status structure */
 	debugfs_create_x32("intf", 0444, status, &priv->status.intf);
