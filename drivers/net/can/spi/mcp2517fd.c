@@ -904,6 +904,9 @@ struct mcp2517fd_priv {
 		u64 int_rx_count;
 		u64 int_tx_count;
 
+		/* dlc statistics */
+		u64 rx_dlc_usage[16];
+		u64 tx_dlc_usage[16];
 	} stats;
 
 	/* the current status of the mcp2517fd */
@@ -1593,6 +1596,7 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 	struct canfd_frame *frame;
 	struct sk_buff *skb;
 	u32 flags = rx->header.flags;
+	int dlc;
 
 	/* allocate the skb buffer */
 	skb = alloc_canfd_skb(priv->net, &frame);
@@ -1606,8 +1610,8 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 	frame->flags |= (flags & CAN_OBJ_FLAGS_BRS) ? CANFD_BRS : 0;
 	frame->flags |= (flags & CAN_OBJ_FLAGS_ESI) ? CANFD_ESI : 0;
 
-	frame->len = can_dlc2len((flags & CAN_OBJ_FLAGS_DLC_MASK)
-				 >> CAN_OBJ_FLAGS_DLC_SHIFT);
+	dlc = (flags & CAN_OBJ_FLAGS_DLC_MASK) >> CAN_OBJ_FLAGS_DLC_SHIFT;
+	frame->len = can_dlc2len(dlc);
 
 	memcpy(frame->data, rx->data, frame->len);
 
@@ -1616,6 +1620,7 @@ static int mcp2517fd_can_transform_rx_fd(struct spi_device *spi,
 	priv->net->stats.rx_bytes += frame->len;
 	if (rx->header.flags & CAN_OBJ_FLAGS_BRS)
 		priv->stats.rx_brs_count++;
+	priv->stats.rx_dlc_usage[dlc]++;
 
 	can_led_event(priv->net, CAN_LED_EVENT_RX);
 
@@ -1632,6 +1637,7 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 	struct can_frame *frame;
 	u32 flags = rx->header.flags;
 	int len;
+	int dlc;
 
 	/* allocate the skb buffer */
 	skb = alloc_can_skb(priv->net, &frame);
@@ -1643,8 +1649,8 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 
 	mcp2517fd_mcpid_to_canid(rx->header.id, flags, &frame->can_id);
 
-	frame->can_dlc = (flags & CAN_OBJ_FLAGS_DLC_MASK)
-		>> CAN_OBJ_FLAGS_DLC_SHIFT;
+	dlc = (flags & CAN_OBJ_FLAGS_DLC_MASK) >> CAN_OBJ_FLAGS_DLC_SHIFT;
+	frame->can_dlc = dlc;
 
 	len = can_dlc2len(frame->can_dlc);
 
@@ -1652,6 +1658,7 @@ static int mcp2517fd_can_transform_rx_normal(struct spi_device *spi,
 
 	priv->net->stats.rx_packets++;
 	priv->net->stats.rx_bytes += len;
+	priv->stats.rx_dlc_usage[dlc]++;
 
 	can_led_event(priv->net, CAN_LED_EVENT_RX);
 
@@ -1808,6 +1815,7 @@ static int mcp2517fd_process_queued_tef(struct spi_device *spi,
 		priv->stats.tx_fd_count++;
 	if (obj->flags & CAN_OBJ_FLAGS_BRS)
 		priv->stats.tx_brs_count++;
+	priv->stats.tx_dlc_usage[dlc]++;
 
 	/* release it */
 	can_get_echo_skb(priv->net, fifo);
@@ -3732,7 +3740,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 {
 #if defined(CONFIG_DEBUG_FS)
 	struct dentry *root, *fifousage, *fifoaddr, *rx, *tx, *status,
-		*regs, *stats;
+		*regs, *stats, *rxdlc, *txdlc;
 	char name[32];
 	int i;
 
@@ -3748,6 +3756,8 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	regs = debugfs_create_dir("regs", root);
 	stats = debugfs_create_dir("stats", root);
 	fifousage = debugfs_create_dir("fifo_usage", stats);
+	rxdlc = debugfs_create_dir("rx_dlc_usage", stats);
+	txdlc = debugfs_create_dir("tx_dlc_usage", stats);
 
 	/* add spi speed info */
 	debugfs_create_u32("spi_setup_speed_hz", 0444, root,
@@ -3855,6 +3865,15 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 			   &priv->stats.int_rx_count);
 	debugfs_create_u64("int_tx", 0444, stats,
 			   &priv->stats.int_tx_count);
+
+	/* dlc statistics */
+	for (i = 0; i < 16; i++) {
+		snprintf(name, sizeof(name), "%02i", i);
+		debugfs_create_u64(name, 0444, rxdlc,
+				   &priv->stats.rx_dlc_usage[i]);
+		debugfs_create_u64(name, 0444, txdlc,
+				   &priv->stats.tx_dlc_usage[i]);
+	}
 
 	/* statistics on fifo buffer usage and address */
 	for (i = 1; i < 32; i++) {
