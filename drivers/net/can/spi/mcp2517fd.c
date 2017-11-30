@@ -3342,8 +3342,9 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* now set up RX FIFO */
-	for (i = 0; i < priv->fifos.rx_fifos; i++) {
-		fifo = priv->fifos.rx_fifo_start + i;
+	for (i = 0,
+	     fifo = priv->fifos.rx_fifo_start + priv->fifos.rx_fifos - 1;
+	     i < priv->fifos.rx_fifos; i++, fifo--) {
 		/* prepare the fifo itself */
 		ret = mcp2517fd_cmd_write(
 			spi, CAN_FIFOCON(fifo),
