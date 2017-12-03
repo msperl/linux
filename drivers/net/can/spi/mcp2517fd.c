@@ -950,19 +950,19 @@ struct mcp2517fd_priv {
 
 /* module parameters */
 bool use_bulk_release_fifos;
-module_param(use_bulk_release_fifos, bool, S_IRUGO | S_IWUSR | S_IWGRP);
+module_param(use_bulk_release_fifos, bool, 0664);
 MODULE_PARM_DESC(use_bulk_release_fifos,
 		 "Use code that favours longer spi transfers over multiple transfers");
 bool use_complete_fdfifo_read;
-module_param(use_complete_fdfifo_read, bool, S_IRUGO | S_IWUSR | S_IWGRP);
+module_param(use_complete_fdfifo_read, bool, 0664);
 MODULE_PARM_DESC(use_complete_fdfifo_read,
 		 "Use code that favours longer spi transfers over multiple transfers for fd can");
 unsigned int tx_fifos;
-module_param(tx_fifos, uint, S_IRUGO | S_IWUSR | S_IWGRP);
-MODULE_PARM_DESC(tx_fifos, "Number of tx-fifos to configure\n");
-
+module_param(tx_fifos, uint, 0664);
+MODULE_PARM_DESC(tx_fifos,
+		 "Number of tx-fifos to configure\n");
 unsigned int bw_sharing_log2bits;
-module_param(bw_sharing_log2bits, uint, S_IRUGO | S_IWUSR | S_IWGRP);
+module_param(bw_sharing_log2bits, uint, 0664);
 MODULE_PARM_DESC(bw_sharing_log2bits,
 		 "Delay between 2 transmissions in number of arbitration bit times\n");
 
@@ -1258,8 +1258,9 @@ static int mcp2517fd_fill_spi_transmit_fifos(struct mcp2517fd_priv *priv)
 	const u32 trigger = CAN_FIFOCON_TXREQ | CAN_FIFOCON_UINC;
 	const int first_byte = (ffs(trigger) - 1)  >> 3;
 
-	priv->spi_transmit_fifos = kzalloc(
-		sizeof(*priv->spi_transmit_fifos) * priv->fifos.tx_fifos,
+	priv->spi_transmit_fifos = kcalloc(
+		priv->fifos.tx_fifos,
+		sizeof(*priv->spi_transmit_fifos),
 		GFP_KERNEL | GFP_DMA);
 	if (!priv->spi_transmit_fifos)
 		return -ENOMEM;
@@ -2370,7 +2371,8 @@ static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
 		if (priv->new_state >= CAN_STATE_ERROR_WARNING &&
 		    priv->new_state <= CAN_STATE_BUS_OFF)
 			priv->can.can_stats.error_warning++;
-	case CAN_STATE_ERROR_WARNING:	/* fallthrough */
+		/* fallthrough */
+	case CAN_STATE_ERROR_WARNING:
 		if (priv->new_state >= CAN_STATE_ERROR_PASSIVE &&
 		    priv->new_state <= CAN_STATE_BUS_OFF)
 			priv->can.can_stats.error_passive++;
@@ -3476,8 +3478,8 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		return PTR_ERR(clk);
 	freq = clk_get_rate(clk);
 
-	if ((freq < MCP2517FD_MIN_CLOCK_FREQUENCY) ||
-	    (freq > MCP2517FD_MAX_CLOCK_FREQUENCY)) {
+	if (freq < MCP2517FD_MIN_CLOCK_FREQUENCY ||
+	    freq > MCP2517FD_MAX_CLOCK_FREQUENCY) {
 		dev_err(&spi->dev,
 			"Clock frequency %i is not in range\n", freq);
 		return -ERANGE;
