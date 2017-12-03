@@ -3308,7 +3308,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		priv->fifos.rx_fifo_depth;
 
 	/* calcluate tef size */
-	priv->fifos.tef_fifos = priv->fifos.tef_fifos;
+	priv->fifos.tef_fifos = priv->fifos.tx_fifos;
 	fifo = available_memory / sizeof(struct mcp2517fd_obj_tef);
 	if (fifo > 0) {
 		priv->fifos.tef_fifos += fifo;
