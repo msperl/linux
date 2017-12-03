@@ -2058,31 +2058,33 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	u32 mask = priv->status.rxif;
-	u32 rx_fifo_end = priv->fifos.rx_fifo_start +
-		priv->fifos.rx_fifos;
-	int i, j;
+	int i, start, end;
 	int ret;
 
-	/* read all the "open" segments in big chunks */
-	for (i = priv->fifos.rx_fifo_start; i < rx_fifo_end; i++) {
-		if (mask & BIT(i)) {
-			/* find the last set bit in sequence */
-			for (j = i;
-			     (j < rx_fifo_end) && (mask & BIT(j));
-			     j++) {
-				/* clear the mask */
-				mask &= ~BIT(j);
-			}
+	/* find blocks of set bits top down */
+	for (i = priv->fifos.rx_fifo_start + priv->fifos.rx_fifos - 1;
+	     mask && (i >= priv->fifos.rx_fifo_start);
+	     i--) {
+		/* if the bit is 0 then continue loop to find a 1 */
+		if ((mask & BIT(i)) == 0)
+			continue;
 
-			ret = mcp2517fd_bulk_read_fifo_range(spi, i, j);
-			if (ret)
-				return ret;
-			/* skip the already handled bits */
-			i = j;
+		/* so we found a non-0 bit - this is start and end */
+		start = end = i;
+
+		/* find the first bit set */
+		for (; mask & BIT(i); i--) {
+			mask &= ~BIT(i);
+			start = i;
 		}
+
+		/* now process that range */
+		ret = mcp2517fd_bulk_read_fifo_range(spi, start, end + 1);
+                if (ret)
+			return ret;
 	}
 
-	return 0;
+        return 0;
 }
 
 static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
