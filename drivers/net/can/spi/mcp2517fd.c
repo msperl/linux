@@ -1497,6 +1497,7 @@ static int mcp2517fd_transmit_message_common(
 static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 					struct canfd_frame *frame)
 {
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct mcp2517fd_obj_tx obj;
 	int dlc = can_len2dlc(frame->len);
 	u32 flags;
@@ -1508,9 +1509,15 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 	flags |= dlc << CAN_OBJ_FLAGS_DLC_SHIFT;
 	flags |= (frame->can_id & CAN_EFF_FLAG) ? CAN_OBJ_FLAGS_IDE : 0;
 	flags |= (frame->can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
-	flags |= (frame->flags & CANFD_BRS) ? CAN_OBJ_FLAGS_BRS : 0;
+	if (frame->flags & CANFD_BRS) {
+		flags |= CAN_OBJ_FLAGS_BRS;
+		priv->stats.tx_brs_count++;
+	}
 	flags |= (frame->flags & CANFD_ESI) ? CAN_OBJ_FLAGS_ESI : 0;
 	flags |= CAN_OBJ_FLAGS_FDF;
+
+	priv->stats.tx_fd_count++;
+	priv->stats.tx_dlc_usage[dlc]++;
 
 	obj.header.flags = flags;
 
@@ -1521,11 +1528,14 @@ static int mcp2517fd_transmit_fdmessage(struct spi_device *spi, int fifo,
 static int mcp2517fd_transmit_message(struct spi_device *spi, int fifo,
 				      struct can_frame *frame)
 {
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 	struct mcp2517fd_obj_tx obj;
 	u32 flags;
 
 	if (frame->can_dlc > 8)
 		frame->can_dlc = 8;
+
+	priv->stats.tx_dlc_usage[frame->can_dlc]++;
 
 	mcp2517fd_canid_to_mcpid(frame->can_id, &obj.header.id, &flags);
 
