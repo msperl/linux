@@ -2009,16 +2009,57 @@ static int mcp2517fd_read_fifos(struct spi_device *spi)
 	return 0;
 }
 
+static int mcp2517fd_bulk_read_fifo_range(struct spi_device *spi,
+					  int start, int end)
+{
+	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
+	const int fifo_header_size = sizeof(struct mcp2517fd_obj_rx);
+	const int fifo_max_payload_size = priv->fifos.payload_size;
+	const int fifo_max_size = fifo_header_size + fifo_max_payload_size;
+	struct mcp2517fd_obj_rx *rx;
+	int i;
+	int ret;
+
+	/* now we got start and end, so read the range */
+	ret = mcp2517fd_cmd_readn(
+		spi,
+		FIFO_DATA(priv->fifos.fifo_address[start]),
+		priv->fifos.fifo_data +
+		priv->fifos.fifo_address[start],
+		(end - start) * fifo_max_size,
+		priv->spi_speed_hz);
+	if (ret)
+		return ret;
+
+	/* clear all the fifos in range */
+	if (use_bulk_release_fifos)
+		ret = mcp2517fd_bulk_release_fifos(spi, start, end);
+	else
+		ret = mcp2517fd_normal_release_fifos(spi, start, end);
+	if (ret)
+		return ret;
+
+	/* preprocess data */
+	for (i = start; i < end ; i++) {
+		/* store the fifo to process */
+		rx = (struct mcp2517fd_obj_rx *)(
+			priv->fifos.fifo_data +
+			priv->fifos.fifo_address[i]);
+		/* process fifo stats */
+		mcp2517fd_transform_rx(spi, rx);
+		/* increment usage */
+		priv->stats.fifo_usage[i]++;
+	}
+
+	return 0;
+}
+
 static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	int fifo_header_size = sizeof(struct mcp2517fd_obj_rx);
-	int fifo_max_payload_size = priv->fifos.payload_size;
-	int fifo_max_size = fifo_header_size + fifo_max_payload_size;
 	u32 mask = priv->status.rxif;
 	u32 rx_fifo_end = priv->fifos.rx_fifo_start +
 		priv->fifos.rx_fifos;
-	struct mcp2517fd_obj_rx *rx;
 	int i, j;
 	int ret;
 
@@ -2033,38 +2074,11 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 				mask &= ~BIT(j);
 			}
 
-			/* now we got start and end, so read the range */
-			ret = mcp2517fd_cmd_readn(
-				spi,
-				FIFO_DATA(priv->fifos.fifo_address[i]),
-				priv->fifos.fifo_data +
-				priv->fifos.fifo_address[i],
-				(j - i) * fifo_max_size,
-				priv->spi_speed_hz);
+			ret = mcp2517fd_bulk_read_fifo_range(spi, i, j);
 			if (ret)
 				return ret;
-
-			/* clear all the fifos in range */
-			if (use_bulk_release_fifos)
-				ret = mcp2517fd_bulk_release_fifos(spi,
-								   i, j);
-			else
-				ret = mcp2517fd_normal_release_fifos(spi,
-								     i, j);
-			if (ret)
-				return ret;
-
-			/* preprocess data */
-			for (; i < j ; i++) {
-				/* store the fifo to process */
-				rx = (struct mcp2517fd_obj_rx *)(
-					priv->fifos.fifo_data +
-					priv->fifos.fifo_address[i]);
-				/* process fifo stats */
-				mcp2517fd_transform_rx(spi, rx);
-				/* increment usage */
-				priv->stats.fifo_usage[i]++;
-			}
+			/* skip the already handled bits */
+			i = j;
 		}
 	}
 
