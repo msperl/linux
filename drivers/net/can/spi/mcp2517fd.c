@@ -1966,9 +1966,9 @@ static int mcp2517fd_read_fifos(struct spi_device *spi)
 	int ret;
 
 	/* read all the "open" segments in big chunks */
-	for (i = priv->fifos.rx_fifo_start;
-	     i < priv->fifos.rx_fifo_start + priv->fifos.rx_fifos;
-	     i++) {
+	for (i = priv->fifos.rx_fifo_start + priv->fifos.rx_fifos - 1;
+	     i >= priv->fifos.rx_fifo_start;
+	     i--) {
 		if (!(mask & BIT(i)))
 			continue;
 		/* the fifo to fill */
