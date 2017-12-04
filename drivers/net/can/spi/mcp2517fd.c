@@ -2083,7 +2083,8 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 			continue;
 
 		/* so we found a non-0 bit - this is start and end */
-		start = end = i;
+		start = i;
+		end = i;
 
 		/* find the first bit set */
 		for (; mask & BIT(i); i--) {
@@ -2093,11 +2094,11 @@ static int mcp2517fd_bulk_read_fifos(struct spi_device *spi)
 
 		/* now process that range */
 		ret = mcp2517fd_bulk_read_fifo_range(spi, start, end + 1);
-                if (ret)
+		if (ret)
 			return ret;
 	}
 
-        return 0;
+	return 0;
 }
 
 static int mcp2517fd_can_ist_handle_rxif(struct spi_device *spi)
@@ -2227,39 +2228,6 @@ static int mcp2517fd_can_ist_handle_tefif_count(struct spi_device *spi,
 	/* now clear TEF for each */
 	/* TODO: optimize for BULK reads, as we (hopefully) know COUNT */
 	for (i = 0; i < count; i++) {
-#if 0
-		/* for Debug and validation purposes */
-		struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-		u32 val[2];
-
-		/* get the current TEFSTA and TEFUA */
-		ret = mcp2517fd_cmd_readn(priv->spi,
-					  CAN_TEFSTA,
-					  val,
-					  8,
-					  priv->spi_speed_hz);
-		if (ret)
-			return ret;
-		mcp2517fd_convert_to_cpu(val, 2);
-
-		/* check for interrupt flags */
-		if (!(val[0] & CAN_TEFSTA_TEFNEIF)) {
-			dev_err(&spi->dev,
-				"we got no mor tef, but we still should read %i computed tefs\n",
-				count - i);
-			return 0;
-		}
-
-		/* handle a single TEF taking the address we read
-		 * not the computed version
-		 */
-		if (priv->fifos.tef_address != val[1]) {
-			dev_err(&spi->dev,
-				"TEF Address mismatch - read: %04x calculated: %04x\n",
-				val[1], priv->fifos.tef_address);
-			priv->fifos.tef_address = val[1];
-		}
-#endif
 		/* handle a single TEF */
 		ret = mcp2517fd_can_ist_handle_tefif_handle_single(spi);
 		if (ret)
