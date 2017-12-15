@@ -9,7 +9,7 @@
     compatible = "brcm,bcm2835", "brcm,bcm2836", "brcm,bcm2708", "brcm,bcm2709";
     /* disable spi-dev for spi0.1 */
     fragment@0 {
-        target = <&spi1>;
+        target = <&spi0>;
         __overlay__ {
             status = "okay";
         };
@@ -48,7 +48,7 @@
 
     /* the spi config of the can-controller itself binding everything together */
     fragment@4 {
-        target = <&spi1>;
+        target = <&spi0>;
         __overlay__ {
             /* needed to avoid dtc warning */
             #address-cells = <1>;
