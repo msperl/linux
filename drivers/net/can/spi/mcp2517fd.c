@@ -340,6 +340,9 @@
 #  define CAN_TDC_TDCMOD_MASK					\
 	GENMASK(CAN_TDC_TDCMOD_SHIFT + CAN_TDC_TDCMOD_BITS - 1, \
 		CAN_TDC_TDCMOD_SHIFT)
+#  define CAN_TDC_TDCMOD_DISABLED	0
+#  define CAN_TDC_TDCMOD_MANUAL		1
+#  define CAN_TDC_TDCMOD_AUTO		2
 #  define CAN_TDC_SID11EN		BIT(24)
 #  define CAN_TDC_EDGFLTEN		BIT(25)
 #define CAN_TBC				CAN_SFR_BASE(0x10)
@@ -3002,6 +3005,17 @@ static int mcp2517fd_do_set_data_bittiming(struct net_device *net)
 	int tseg1 = propseg + pseg1;
 	int tseg2 = pseg2;
 
+	int ret;
+
+	/* set up Transmitter delay compensation */
+	if (!priv->regs.tdc)
+		priv->regs.tdc = CAN_TDC_EDGFLTEN |
+			(CAN_TDC_TDCMOD_AUTO << CAN_TDC_TDCMOD_SHIFT);
+	ret = mcp2517fd_cmd_write(spi, CAN_TDC, priv->regs.tdc,
+				  priv->spi_setup_speed_hz);
+	if (ret)
+		return ret;
+
 	/* calculate nominal bit timing */
 	priv->regs.dbtcfg = ((sjw - 1) << CAN_DBTCFG_SJW_SHIFT) |
 		((tseg2 - 1) << CAN_DBTCFG_TSEG2_SHIFT) |
@@ -3537,13 +3551,6 @@ static int mcp2517fd_setup(struct net_device *net,
 	if (ret)
 		return ret;
 
-	/* set up Transmitter Delay compensation */
-	priv->regs.tdc = CAN_TDC_EDGFLTEN;
-	ret = mcp2517fd_cmd_write(spi, CAN_TDC, priv->regs.tdc,
-				  priv->spi_setup_speed_hz);
-	if (ret)
-		return ret;
-
 	/* time stamp control register - 1ns resolution, but disabled */
 	ret = mcp2517fd_cmd_write(spi, CAN_TBC, 0,
 				  priv->spi_setup_speed_hz);
@@ -3831,7 +3838,7 @@ static void mcp2517fd_debugfs_add(struct mcp2517fd_priv *priv)
 	debugfs_create_x32("ecccon", 0444, regs, &priv->regs.ecccon);
 	debugfs_create_x32("osc", 0444, regs, &priv->regs.osc);
 	debugfs_create_x32("iocon", 0444, regs, &priv->regs.iocon);
-	debugfs_create_x32("tdc", 0444, regs, &priv->regs.tdc);
+	debugfs_create_x32("tdc", 0774, regs, &priv->regs.tdc);
 	debugfs_create_x32("tscon", 0444, regs, &priv->regs.tscon);
 	debugfs_create_x32("nbtcfg", 0444, regs, &priv->regs.nbtcfg);
 	debugfs_create_x32("dbtcfg", 0444, regs, &priv->regs.dbtcfg);
