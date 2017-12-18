@@ -7,41 +7,30 @@ Required properties:
  - clocks: The clock feeding the CAN controller.
  - interrupt-parent: The parent interrupt controller.
  - interrupts: Should contain IRQ line for the CAN controller.
+ - gpio-controller : Indicates this device is a GPIO controller.
+ - #gpio-cells : Should be two. The first cell is the pin number and the
+		 second cell is used to specify optional parameters
+		 (currently unused).
 
 Optional properties:
  - vdd-supply: Regulator that powers the CAN controller.
  - xceiver-supply: Regulator that powers the CAN transceiver.
- - microchip,clock_out_div = <0|1|2|4|10>: Clock output pin divider
+ - microchip,clock-out-div = <0|1|2|4|10>: Clock output pin divider
    			     		   0 = Start of Frame output
 					   default: 10
- - microchip,clock_div = <1|2>: internal clock divider - default 1
- - microchip,gpio_opendrain: gpio (int0,1) in open drain mode
-   			     instead of default push/pull
- - microchip,int_opendrain: int pin in open drain mode
-   			    instead of default push/pull
- - microchip,txcan_opendrain: txcan pin in open drain mode
-      			      instead of default push/pull
- - microchip,gpio0_mode : gpio mode functionality
-			  0 = input
-   			  1 = TX interrupt output - default
-			  2 = output default low
-			  3 = output default high
-			  4 = (tx) transciever standby
- - microchip,gpio1_mode : gpio mode functionality
-			  0 = input - default
-   			  1 = RX interrupt output - default
-			  2 = output default low
-			  3 = output default high
+ - microchip,clock-div: divide the internal clock divider by 2
+ - gpio-open-drain: put int, gpio0, gpio1 in open-drain mode
+   		    instead of default push-pull
 
 Example:
-	can0: can@1 {
+	can0: can@0 {
 		compatible = "microchip,mcp2515";
-		reg = <1>;
+		reg = <0>;
 		clocks = <&clk24m>;
 		interrupt-parent = <&gpio4>;
 		interrupts = <13 0x8>;
 		vdd-supply = <&reg5v0>;
 		xceiver-supply = <&reg5v0>;
-		microchip,gpio0_mode = <4>;
-		microchip,gpio0_mode = <1>;
+		gpio-controller;
+                #gpio-cells = <2>;
 	};
