@@ -1429,13 +1429,17 @@ static int mcp2517fd_hw_check_clock(struct spi_device *spi)
 	if (val == priv->regs.osc)
 		return 0;
 
-	dev_dbg(&spi->dev,
-		"The oscillator register %08x does not match what we expect: %08x\n",
-		val, priv->regs.osc);
-
 	/* ignore all those ready bits on second try */
-	if ((val & 0xff) == (priv->regs.osc &0xff))
+	if ((val & 0xff) == (priv->regs.osc &0xff)) {
+		dev_info(&spi->dev,
+			"The oscillator register value %08x does not match what we expect: %08x - it is still reasonable, but please investigate\n",
+			val, priv->regs.osc);
 		return 0;
+	}
+
+	dev_err(&spi->dev,
+		"The oscillator register value %08x does not match what we expect: %08x\n",
+		val, priv->regs.osc);
 
 	return -ENODEV;
 }
@@ -3331,10 +3335,8 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	case MCP2517FD_OSC_OSCRDY: /* either the clock is ready */
 		break;
 	case MCP2517FD_OSC_OSCDIS: /* or the clock is disabled */
-		/* clear the disable bit */
-		priv->regs.osc &= ~MCP2517FD_OSC_OSCDIS;
 		/* wakeup sleeping system */
-		ret = mcp2517fd_hw_wake(spi);
+		ret = mcp2517fd_wake_from_sleep(spi);
 		if (ret)
 			return ret;
 		/* send a reset, hoping we are now in Config mode */
