@@ -831,7 +831,6 @@ struct mcp2517fd_priv {
 		int  clock_odiv;
 
 		/* GPIO configuration */
-		bool txcan_opendrain;
 		bool gpio_opendrain;
 	} config;
 
@@ -4789,7 +4788,6 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		goto out_clk;
 
 	/* all by default as push/pull */
-	priv->config.txcan_opendrain = false;
 	priv->config.gpio_opendrain = false;
 
 	/* do not use the SCK clock divider of 2 */
@@ -4884,14 +4882,12 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	priv->regs.iocon = 0;
 
 	/* SOF/CLOCKOUT pin 3 */
-	if (priv->config.clock_odiv < 0)
+	if (priv->config.clock_odiv < 1)
 		priv->regs.iocon |= MCP2517FD_IOCON_SOF;
 
-	/* INT/GPIO (probably also clockout) and TXCAN pins as open drain */
+	/* INT/GPIO (probably also clockout) as open drain */
 	if (priv->config.gpio_opendrain)
 		priv->regs.iocon |= MCP2517FD_IOCON_INTOD;
-	if (priv->config.txcan_opendrain)
-		priv->regs.iocon |= MCP2517FD_IOCON_TXCANOD;
 
 	ret = mcp2517fd_cmd_write(spi, MCP2517FD_IOCON, priv->regs.iocon,
 				  priv->spi_setup_speed_hz);
