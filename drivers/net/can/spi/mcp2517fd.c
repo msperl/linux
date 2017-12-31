@@ -808,7 +808,7 @@ struct mcp2517fd_priv {
 	struct regulator *transceiver;
 	struct clk *clk;
 
-	struct mutex clk_user_lock;
+	struct mutex clk_user_lock; /* lock for enabling/disabling the clock */
 	int clk_user_mask;
 #define MCP2517FD_CLK_USER_CAN BIT(0)
 #define MCP2517FD_CLK_USER_GPIO0 BIT(1)
@@ -1139,7 +1139,6 @@ static int mcp2517fd_write_then_write(struct spi_device *spi,
 		mutex_unlock(&priv->spi_rxtx_lock);
 
 	return ret;
-
 }
 
 /* mcp2517fd spi command/protocol helper */
@@ -1435,9 +1434,9 @@ static int mcp2517fd_hw_check_clock(struct spi_device *spi)
 		return 0;
 
 	/* ignore all those ready bits on second try */
-	if ((val & 0xff) == (priv->regs.osc &0xff)) {
+	if ((val & 0xff) == (priv->regs.osc & 0xff)) {
 		dev_info(&spi->dev,
-			"The oscillator register value %08x does not match what we expect: %08x - it is still reasonable, but please investigate\n",
+			 "The oscillator register value %08x does not match what we expect: %08x - it is still reasonable, but please investigate\n",
 			val, priv->regs.osc);
 		return 0;
 	}
@@ -1513,7 +1512,8 @@ out:
 /* mcp2517fd GPIO helper functions */
 #ifdef CONFIG_GPIOLIB
 
-static int mcp2517fd_gpio_request(struct gpio_chip *chip, unsigned offset)
+static int mcp2517fd_gpio_request(struct gpio_chip *chip,
+				  unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	int clock_requestor = offset ?
@@ -1528,7 +1528,8 @@ static int mcp2517fd_gpio_request(struct gpio_chip *chip, unsigned offset)
 	return 0;
 }
 
-static void mcp2517fd_gpio_free(struct gpio_chip *chip, unsigned offset)
+static void mcp2517fd_gpio_free(struct gpio_chip *chip,
+				unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	int clock_requestor = offset ?
@@ -1541,7 +1542,7 @@ static void mcp2517fd_gpio_free(struct gpio_chip *chip, unsigned offset)
 	mcp2517fd_stop_clock(priv->spi, clock_requestor);
 }
 
-static int mcp2517fd_gpio_get(struct gpio_chip *chip, unsigned offset)
+static int mcp2517fd_gpio_get(struct gpio_chip *chip, unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	u32 mask = (offset) ? MCP2517FD_IOCON_GPIO1 : MCP2517FD_IOCON_GPIO0;
@@ -1562,7 +1563,7 @@ static int mcp2517fd_gpio_get(struct gpio_chip *chip, unsigned offset)
 	return priv->regs.iocon & mask;
 }
 
-static void mcp2517fd_gpio_set(struct gpio_chip *chip, unsigned offset,
+static void mcp2517fd_gpio_set(struct gpio_chip *chip, unsigned int offset,
 			       int value)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
@@ -1584,7 +1585,7 @@ static void mcp2517fd_gpio_set(struct gpio_chip *chip, unsigned offset,
 }
 
 static int mcp2517fd_gpio_direction_input(struct gpio_chip *chip,
-					  unsigned offset)
+					  unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	u32 mask_tri = (offset) ?
@@ -1611,7 +1612,7 @@ static int mcp2517fd_gpio_direction_input(struct gpio_chip *chip,
 }
 
 static int mcp2517fd_gpio_direction_output(struct gpio_chip *chip,
-					 unsigned offset, int value)
+					   unsigned int offset, int value)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	u32 mask_tri = (offset) ?
@@ -1622,9 +1623,6 @@ static int mcp2517fd_gpio_direction_output(struct gpio_chip *chip,
 		MCP2517FD_IOCON_PM1 : MCP2517FD_IOCON_PM0;
 	u32 mask_stby = (offset) ?
 		0 : MCP2517FD_IOCON_XSTBYEN;
-
-	dev_err(&priv->spi->dev,"IOCON = %08x\n", priv->regs.iocon);
-
 
 	/* only handle gpio 0/1 */
 	if (offset > 1)
@@ -1641,9 +1639,6 @@ static int mcp2517fd_gpio_direction_output(struct gpio_chip *chip,
 		priv->regs.iocon |= mask_lat;
 	else
 		priv->regs.iocon &= ~mask_lat;
-
-	dev_err(&priv->spi->dev,"IOCON = %08x - mask = %08x\n",
-		priv->regs.iocon, mask_tri | mask_lat | mask_pm | mask_stby);
 
 	return mcp2517fd_cmd_write_mask(
 		priv->spi, MCP2517FD_IOCON,
@@ -1724,9 +1719,9 @@ static const char * const mcp2517fd_gpio_functions[] = {
 	[MCP2517FD_FSEL_CLKO] = "clko",
 };
 
-#define FUNCTION2GROUP(label, ...) \
-	static const char * const \
-	mcp2517fd_gpio_function_to_groups_##label[] = 	\
+#define FUNCTION2GROUP(label, ...)			\
+	static const char * const			\
+	mcp2517fd_gpio_function_to_groups_##label[] =	\
 	{ __VA_ARGS__ }
 
 FUNCTION2GROUP(gpio, "gpio0", "gpio1");
@@ -1744,27 +1739,27 @@ static int mcp2517fd_pctl_get_groups_count(struct pinctrl_dev *pctldev)
 }
 
 static const char *mcp2517fd_pctl_get_group_name(
-	struct pinctrl_dev *pctldev, unsigned selector)
+	struct pinctrl_dev *pctldev, unsigned int selector)
 {
-        return mcp2517fd_gpio_groups[selector];
+	return mcp2517fd_gpio_groups[selector];
 }
 
 static int mcp2517fd_pctl_get_group_pins(struct pinctrl_dev *pctldev,
-					 unsigned selector,
-					 const unsigned **pins,
-					 unsigned *num_pins)
+					 unsigned int selector,
+					 const unsigned int **pins,
+					 unsigned int *num_pins)
 {
-        *pins = &mcp2517fd_gpio_pins[selector].number;
-        *num_pins = 1;
+	*pins = &mcp2517fd_gpio_pins[selector].number;
+	*num_pins = 1;
 
-        return 0;
+	return 0;
 }
 
-
 static int mcp2517fd_pctl_get_func(struct pinctrl_dev *pctldev,
-				    unsigned offset)
+				   unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
+
 	switch (offset) {
 	case 0: /* gpio0 */
 		if (priv->regs.iocon & MCP2517FD_IOCON_PM0) {
@@ -1802,7 +1797,7 @@ static int mcp2517fd_pctl_get_func(struct pinctrl_dev *pctldev,
 }
 
 static int mcp2517fd_pctl_get_value(struct pinctrl_dev *pctldev,
-				    unsigned offset)
+				    unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
@@ -1812,12 +1807,12 @@ static int mcp2517fd_pctl_get_value(struct pinctrl_dev *pctldev,
 	case 1: /* gpio1 */
 		return priv->regs.iocon & MCP2517FD_IOCON_GPIO1 ? 1 : 0;
 	default: /* all others give no value */
-		return 2;
+		return -EINVAL;
 	}
 }
 
-static char * mcp2517fd_pctl_get_drive(struct pinctrl_dev *pctldev,
-				    unsigned offset)
+static char *mcp2517fd_pctl_get_drive(struct pinctrl_dev *pctldev,
+				      unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
@@ -1835,10 +1830,9 @@ static char * mcp2517fd_pctl_get_drive(struct pinctrl_dev *pctldev,
 	return "push/pull";
 }
 
-
 static void mcp2517fd_pctl_pin_dbg_show(struct pinctrl_dev *pctldev,
 					struct seq_file *s,
-					unsigned offset)
+					unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 	int func, value, ret;
@@ -1878,7 +1872,7 @@ static void mcp2517fd_pctl_pin_dbg_show(struct pinctrl_dev *pctldev,
 	type = mcp2517fd_pctl_get_drive(pctldev, offset);
 
 	/* print them */
-        seq_printf(s, "function %s%s; drive %s",
+	seq_printf(s, "function %s%s; drive %s",
 		   fname, val, type);
 }
 
@@ -1888,19 +1882,22 @@ static int mcp2517fd_pmx_get_functions_count(struct pinctrl_dev *pctldev)
 }
 
 static const char *mcp2517fd_pmx_get_function_name(
-	struct pinctrl_dev *pctldev, unsigned selector)
+	struct pinctrl_dev *pctldev, unsigned int selector)
 {
 	return mcp2517fd_gpio_functions[selector];
 }
 
 static int mcp2517fd_pmx_get_function_groups(struct pinctrl_dev *pctldev,
-					     unsigned selector,
+					     unsigned int selector,
 					     const char * const **groups,
-					     unsigned * const num_groups)
+					     unsigned int * const num_groups)
 {
 #define ASSIGN_GROUPS_NUM(label)					\
-	*groups = mcp2517fd_gpio_function_to_groups_ ## label;		\
-	*num_groups = ARRAY_SIZE(mcp2517fd_gpio_function_to_groups_ ## label)
+	do {								\
+		*groups = mcp2517fd_gpio_function_to_groups_ ## label;	\
+		*num_groups = ARRAY_SIZE(				\
+			mcp2517fd_gpio_function_to_groups_ ## label);	\
+	} while (0)
 
 	switch (selector) {
 	case MCP2517FD_FSEL_GPIO_IN:
@@ -1932,11 +1929,11 @@ static int mcp2517fd_pmx_get_function_groups(struct pinctrl_dev *pctldev,
 		return -EINVAL;
 	}
 
-        return 0;
+	return 0;
 }
 
 static int mcp2517fd_pmx_set_gpio0(struct pinctrl_dev *pctldev,
-				   unsigned func_selector)
+				   unsigned int func_selector)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 	u32 mask = MCP2517FD_IOCON_PM0 |
@@ -1970,7 +1967,7 @@ static int mcp2517fd_pmx_set_gpio0(struct pinctrl_dev *pctldev,
 }
 
 static int mcp2517fd_pmx_set_gpio1(struct pinctrl_dev *pctldev,
-				   unsigned func_selector)
+				   unsigned int func_selector)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 	u32 mask = MCP2517FD_IOCON_PM1 |
@@ -2000,7 +1997,7 @@ static int mcp2517fd_pmx_set_gpio1(struct pinctrl_dev *pctldev,
 }
 
 static int mcp2517fd_pmx_set_clko(struct pinctrl_dev *pctldev,
-				  unsigned func_selector)
+				  unsigned int func_selector)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
@@ -2022,10 +2019,9 @@ static int mcp2517fd_pmx_set_clko(struct pinctrl_dev *pctldev,
 }
 
 static int mcp2517fd_pmx_set(struct pinctrl_dev *pctldev,
-			     unsigned func_selector,
-			     unsigned group_selector)
+			     unsigned int func_selector,
+			     unsigned int group_selector)
 {
-
 	switch (group_selector) {
 	case 0: /* gpio0 */
 		return mcp2517fd_pmx_set_gpio0(pctldev, func_selector);
@@ -2049,7 +2045,7 @@ static int mcp2517fd_pmx_set(struct pinctrl_dev *pctldev,
 }
 
 static int mcp2517fd_pinconf_get(struct pinctrl_dev *pctldev,
-				 unsigned pin, unsigned long *config)
+				 unsigned int pin, unsigned long *config)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
@@ -2073,8 +2069,8 @@ static int mcp2517fd_pinconf_get(struct pinctrl_dev *pctldev,
 }
 
 static int mcp2517fd_pinconf_set(struct pinctrl_dev *pctldev,
-				 unsigned pin, unsigned long *configs,
-				 unsigned num_configs)
+				 unsigned int pin, unsigned long *configs,
+				 unsigned int num_configs)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 	int i;
@@ -2118,18 +2114,22 @@ static const struct pinctrl_ops mcp2517fd_pctl_ops = {
 	.get_group_name = mcp2517fd_pctl_get_group_name,
 	.get_group_pins = mcp2517fd_pctl_get_group_pins,
 	.pin_dbg_show = mcp2517fd_pctl_pin_dbg_show,
-//	.dt_node_to_map = mcp2517fd_pctl_dt_node_to_map,
-//	.dt_free_map = mcp2517fd_pctl_dt_free_map,
+	/* Maybe TODO:
+	 * .dt_node_to_map = mcp2517fd_pctl_dt_node_to_map,
+	 * .dt_free_map = mcp2517fd_pctl_dt_free_map,
+	 */
 };
 
 static const struct pinmux_ops mcp2517fd_pmx_ops = {
-//	.free = mcp2517fd_pmx_free,
 	.get_functions_count = mcp2517fd_pmx_get_functions_count,
 	.get_function_name = mcp2517fd_pmx_get_function_name,
 	.get_function_groups = mcp2517fd_pmx_get_function_groups,
 	.set_mux = mcp2517fd_pmx_set,
-//	.gpio_disable_free = mcp2517fd_pmx_gpio_disable_free,
-//	.gpio_set_direction = mcp2517fd_pmx_gpio_set_direction,
+	/* Maybe TODO:
+	 * .free = mcp2517fd_pmx_free,
+	 * .gpio_disable_free = mcp2517fd_pmx_gpio_disable_free,
+	 * .gpio_set_direction = mcp2517fd_pmx_gpio_set_direction,
+	 */
 };
 
 static const struct pinconf_ops mcp2517fd_pinconf_ops = {
@@ -2151,10 +2151,10 @@ static int mcp2517fd_pinctrl_setup(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
 
-        priv->pinctrl = devm_pinctrl_register(
+	priv->pinctrl = devm_pinctrl_register(
 		&spi->dev, &mcp2517fd_pinctrl_desc, priv);
-        if (IS_ERR(priv->pinctrl))
-                return PTR_ERR(priv->pinctrl);
+	if (IS_ERR(priv->pinctrl))
+		return PTR_ERR(priv->pinctrl);
 
 	return 0;
 }
@@ -2166,7 +2166,6 @@ static int mcp2517fd_pinctrl_setup(struct spi_device *spi)
 	return 0;
 }
 #endif
-
 
 /* ideally these would be defined in uapi/linux/can.h */
 #define CAN_EFF_SID_SHIFT		(CAN_EFF_ID_BITS - CAN_SFF_ID_BITS)
@@ -3111,7 +3110,6 @@ static int mcp2517fd_can_ist_handle_txatif_fifo(struct spi_device *spi,
 		return ret;
 
 	/* clear the relevant interrupt flags */
-	dev_err(&spi->dev, "txatif-clearing fifo %i\n", fifo);
 	ret = mcp2517fd_cmd_write_mask(spi,
 				       CAN_FIFOSTA(fifo),
 				       0,
@@ -3255,10 +3253,10 @@ static int mcp2517fd_can_ist_handle_modif(struct spi_device *spi)
 		return 0;
 
 	/* these we need to handle correctly, so warn and give context */
-	dev_err(&spi->dev,
-		"Controller switched from mode %s(%u) to %s(%u)\n",
-		mcp2517fd_mode_names[omode], omode,
-		mcp2517fd_mode_names[mode], mode);
+	dev_warn(&spi->dev,
+		 "Controller unexpectedly switched from mode %s(%u) to %s(%u)\n",
+		 mcp2517fd_mode_names[omode], omode,
+		 mcp2517fd_mode_names[mode], mode);
 
 	return 0;
 }
@@ -4325,7 +4323,7 @@ static int mcp2517fd_open(struct net_device *net)
 	priv->force_quit = 0;
 
 	/* clear those statistics */
-	memset(&priv->stats,0, sizeof(priv->stats));
+	memset(&priv->stats, 0, sizeof(priv->stats));
 
 	ret = request_threaded_irq(spi->irq, NULL,
 				   mcp2517fd_can_ist,
