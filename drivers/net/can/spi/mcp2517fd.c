@@ -1,5 +1,5 @@
 /*
- * CAN bus driver for Microchip 2517FD CAN Controller with SPI Interface
+ * CAN bus driver for Microchip 25XXFD CAN Controller with SPI Interface
  *
  * Copyright 2017 Martin Sperl <kernel@martin.sperl.org>
  *
@@ -141,15 +141,15 @@
  *   spi requests until a POR.
  */
 
-#define MCP2517FD_OST_DELAY_MS		3
-#define MCP2517FD_MIN_CLOCK_FREQUENCY	1000000
-#define MCP2517FD_MAX_CLOCK_FREQUENCY	40000000
-#define MCP2517FD_PLL_MULTIPLIER	10
-#define MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY				\
-	(MCP2517FD_MAX_CLOCK_FREQUENCY / MCP2517FD_PLL_MULTIPLIER)
-#define MCP2517FD_SCLK_DIVIDER		2
+#define MCP25XXFD_OST_DELAY_MS		3
+#define MCP25XXFD_MIN_CLOCK_FREQUENCY	1000000
+#define MCP25XXFD_MAX_CLOCK_FREQUENCY	40000000
+#define MCP25XXFD_PLL_MULTIPLIER	10
+#define MCP25XXFD_AUTO_PLL_MAX_CLOCK_FREQUENCY				\
+	(MCP25XXFD_MAX_CLOCK_FREQUENCY / MCP25XXFD_PLL_MULTIPLIER)
+#define MCP25XXFD_SCLK_DIVIDER		2
 
-#define MCP2517FD_OSC_POLLING_JIFFIES	(HZ / 2)
+#define MCP25XXFD_OSC_POLLING_JIFFIES	(HZ / 2)
 
 #define TX_ECHO_SKB_MAX	32
 
@@ -162,60 +162,60 @@
 
 #define ADDRESS_MASK			0x0fff
 
-#define MCP2517FD_SFR_BASE(x)		(0xE00 + (x))
-#define MCP2517FD_OSC			MCP2517FD_SFR_BASE(0x00)
-#  define MCP2517FD_OSC_PLLEN		BIT(0)
-#  define MCP2517FD_OSC_OSCDIS		BIT(2)
-#  define MCP2517FD_OSC_SCLKDIV		BIT(4)
-#  define MCP2517FD_OSC_CLKODIV_BITS	2
-#  define MCP2517FD_OSC_CLKODIV_SHIFT	5
-#  define MCP2517FD_OSC_CLKODIV_MASK			\
-	GENMASK(MCP2517FD_OSC_CLKODIV_SHIFT		\
-		+ MCP2517FD_OSC_CLKODIV_BITS - 1,	\
-		MCP2517FD_OSC_CLKODIV_SHIFT)
-#  define MCP2517FD_OSC_CLKODIV_10	3
-#  define MCP2517FD_OSC_CLKODIV_4	2
-#  define MCP2517FD_OSC_CLKODIV_2	1
-#  define MCP2517FD_OSC_CLKODIV_1	0
-#  define MCP2517FD_OSC_PLLRDY		BIT(8)
-#  define MCP2517FD_OSC_OSCRDY		BIT(10)
-#  define MCP2517FD_OSC_SCLKRDY		BIT(12)
-#define MCP2517FD_IOCON			MCP2517FD_SFR_BASE(0x04)
-#  define MCP2517FD_IOCON_TRIS0		BIT(0)
-#  define MCP2517FD_IOCON_TRIS1		BIT(1)
-#  define MCP2517FD_IOCON_XSTBYEN	BIT(6)
-#  define MCP2517FD_IOCON_LAT0		BIT(8)
-#  define MCP2517FD_IOCON_LAT1		BIT(9)
-#  define MCP2517FD_IOCON_GPIO0		BIT(16)
-#  define MCP2517FD_IOCON_GPIO1		BIT(17)
-#  define MCP2517FD_IOCON_PM0		BIT(24)
-#  define MCP2517FD_IOCON_PM1		BIT(25)
-#  define MCP2517FD_IOCON_TXCANOD	BIT(28)
-#  define MCP2517FD_IOCON_SOF		BIT(29)
-#  define MCP2517FD_IOCON_INTOD		BIT(29)
-#define MCP2517FD_CRC			MCP2517FD_SFR_BASE(0x08)
-#  define MCP2517FD_CRC_MASK		GENMASK(15, 0)
-#  define MCP2517FD_CRC_CRCERRIE	BIT(16)
-#  define MCP2517FD_CRC_FERRIE		BIT(17)
-#  define MCP2517FD_CRC_CRCERRIF	BIT(24)
-#  define MCP2517FD_CRC_FERRIF		BIT(25)
-#define MCP2517FD_ECCCON		MCP2517FD_SFR_BASE(0x0C)
-#  define MCP2517FD_ECCCON_ECCEN	BIT(0)
-#  define MCP2517FD_ECCCON_SECIE	BIT(1)
-#  define MCP2517FD_ECCCON_DEDIE	BIT(2)
-#  define MCP2517FD_ECCCON_PARITY_BITS 6
-#  define MCP2517FD_ECCCON_PARITY_SHIFT 8
-#  define MCP2517FD_ECCCON_PARITY_MASK			\
-	GENMASK(MCP2517FD_ECCCON_PARITY_SHIFT		\
-		+ MCP2517FD_ECCCON_PARITY_BITS - 1,	\
-		MCP2517FD_ECCCON_PARITY_SHIFT)
-#define MCP2517FD_ECCSTAT		MCP2517FD_SFR_BASE(0x10)
-#  define MCP2517FD_ECCSTAT_SECIF	BIT(1)
-#  define MCP2517FD_ECCSTAT_DEDIF	BIT(2)
-#  define MCP2517FD_ECCSTAT_ERRADDR_SHIFT 8
-#  define MCP2517FD_ECCSTAT_ERRADDR_MASK	      \
-	GENMASK(MCP2517FD_ECCSTAT_ERRADDR_SHIFT + 11, \
-		MCP2517FD_ECCSTAT_ERRADDR_SHIFT)
+#define MCP25XXFD_SFR_BASE(x)		(0xE00 + (x))
+#define MCP25XXFD_OSC			MCP25XXFD_SFR_BASE(0x00)
+#  define MCP25XXFD_OSC_PLLEN		BIT(0)
+#  define MCP25XXFD_OSC_OSCDIS		BIT(2)
+#  define MCP25XXFD_OSC_SCLKDIV		BIT(4)
+#  define MCP25XXFD_OSC_CLKODIV_BITS	2
+#  define MCP25XXFD_OSC_CLKODIV_SHIFT	5
+#  define MCP25XXFD_OSC_CLKODIV_MASK			\
+	GENMASK(MCP25XXFD_OSC_CLKODIV_SHIFT		\
+		+ MCP25XXFD_OSC_CLKODIV_BITS - 1,	\
+		MCP25XXFD_OSC_CLKODIV_SHIFT)
+#  define MCP25XXFD_OSC_CLKODIV_10	3
+#  define MCP25XXFD_OSC_CLKODIV_4	2
+#  define MCP25XXFD_OSC_CLKODIV_2	1
+#  define MCP25XXFD_OSC_CLKODIV_1	0
+#  define MCP25XXFD_OSC_PLLRDY		BIT(8)
+#  define MCP25XXFD_OSC_OSCRDY		BIT(10)
+#  define MCP25XXFD_OSC_SCLKRDY		BIT(12)
+#define MCP25XXFD_IOCON			MCP25XXFD_SFR_BASE(0x04)
+#  define MCP25XXFD_IOCON_TRIS0		BIT(0)
+#  define MCP25XXFD_IOCON_TRIS1		BIT(1)
+#  define MCP25XXFD_IOCON_XSTBYEN	BIT(6)
+#  define MCP25XXFD_IOCON_LAT0		BIT(8)
+#  define MCP25XXFD_IOCON_LAT1		BIT(9)
+#  define MCP25XXFD_IOCON_GPIO0		BIT(16)
+#  define MCP25XXFD_IOCON_GPIO1		BIT(17)
+#  define MCP25XXFD_IOCON_PM0		BIT(24)
+#  define MCP25XXFD_IOCON_PM1		BIT(25)
+#  define MCP25XXFD_IOCON_TXCANOD	BIT(28)
+#  define MCP25XXFD_IOCON_SOF		BIT(29)
+#  define MCP25XXFD_IOCON_INTOD		BIT(29)
+#define MCP25XXFD_CRC			MCP25XXFD_SFR_BASE(0x08)
+#  define MCP25XXFD_CRC_MASK		GENMASK(15, 0)
+#  define MCP25XXFD_CRC_CRCERRIE	BIT(16)
+#  define MCP25XXFD_CRC_FERRIE		BIT(17)
+#  define MCP25XXFD_CRC_CRCERRIF	BIT(24)
+#  define MCP25XXFD_CRC_FERRIF		BIT(25)
+#define MCP25XXFD_ECCCON		MCP25XXFD_SFR_BASE(0x0C)
+#  define MCP25XXFD_ECCCON_ECCEN	BIT(0)
+#  define MCP25XXFD_ECCCON_SECIE	BIT(1)
+#  define MCP25XXFD_ECCCON_DEDIE	BIT(2)
+#  define MCP25XXFD_ECCCON_PARITY_BITS 6
+#  define MCP25XXFD_ECCCON_PARITY_SHIFT 8
+#  define MCP25XXFD_ECCCON_PARITY_MASK			\
+	GENMASK(MCP25XXFD_ECCCON_PARITY_SHIFT		\
+		+ MCP25XXFD_ECCCON_PARITY_BITS - 1,	\
+		MCP25XXFD_ECCCON_PARITY_SHIFT)
+#define MCP25XXFD_ECCSTAT		MCP25XXFD_SFR_BASE(0x10)
+#  define MCP25XXFD_ECCSTAT_SECIF	BIT(1)
+#  define MCP25XXFD_ECCSTAT_DEDIF	BIT(2)
+#  define MCP25XXFD_ECCSTAT_ERRADDR_SHIFT 8
+#  define MCP25XXFD_ECCSTAT_ERRADDR_MASK	      \
+	GENMASK(MCP25XXFD_ECCSTAT_ERRADDR_SHIFT + 11, \
+		MCP25XXFD_ECCSTAT_ERRADDR_SHIFT)
 
 #define CAN_SFR_BASE(x)			(0x000 + (x))
 #define CAN_CON				CAN_SFR_BASE(0x00)
@@ -693,7 +693,7 @@
 
 #define CAN_OBJ_FLAGS_CUSTOM_ISTEF	BIT(31)
 
-#define MCP2517FD_BUFFER_TXRX_SIZE 2048
+#define MCP25XXFD_BUFFER_TXRX_SIZE 2048
 
 static const char * const mcp2517fd_mode_names[] = {
 	[CAN_CON_MODE_MIXED] = "can2.0+canfd",
@@ -772,15 +772,15 @@ static const struct can_bittiming_const mcp2517fd_data_bittiming_const = {
 };
 
 enum mcp2517fd_model {
-	CAN_MCP2517FD	= 0x2517,
+	CAN_MCP25XXFD	= 0x2517,
 };
 
 enum mcp2517fd_gpio_mode {
 	gpio_mode_int		= 0,
-	gpio_mode_standby	= MCP2517FD_IOCON_XSTBYEN,
-	gpio_mode_out_low	= MCP2517FD_IOCON_PM0,
-	gpio_mode_out_high	= MCP2517FD_IOCON_PM0 | MCP2517FD_IOCON_LAT0,
-	gpio_mode_in		= MCP2517FD_IOCON_PM0 | MCP2517FD_IOCON_TRIS0
+	gpio_mode_standby	= MCP25XXFD_IOCON_XSTBYEN,
+	gpio_mode_out_low	= MCP25XXFD_IOCON_PM0,
+	gpio_mode_out_high	= MCP25XXFD_IOCON_PM0 | MCP25XXFD_IOCON_LAT0,
+	gpio_mode_in		= MCP25XXFD_IOCON_PM0 | MCP25XXFD_IOCON_TRIS0
 };
 
 struct mcp2517fd_trigger_tx_message {
@@ -810,9 +810,9 @@ struct mcp2517fd_priv {
 
 	struct mutex clk_user_lock; /* lock for enabling/disabling the clock */
 	int clk_user_mask;
-#define MCP2517FD_CLK_USER_CAN BIT(0)
-#define MCP2517FD_CLK_USER_GPIO0 BIT(1)
-#define MCP2517FD_CLK_USER_GPIO1 BIT(2)
+#define MCP25XXFD_CLK_USER_CAN BIT(0)
+#define MCP25XXFD_CLK_USER_GPIO0 BIT(1)
+#define MCP25XXFD_CLK_USER_GPIO1 BIT(2)
 
 	struct dentry *debugfs_dir;
 
@@ -869,7 +869,7 @@ struct mcp2517fd_priv {
 		u32 rx_fifo_mask;  /* bitmask of which fifo is a rx fifo */
 
 		/* memory image of FIFO RAM on mcp2517fd */
-		u8 fifo_data[MCP2517FD_BUFFER_TXRX_SIZE];
+		u8 fifo_data[MCP25XXFD_BUFFER_TXRX_SIZE];
 
 	} fifos;
 
@@ -991,8 +991,8 @@ struct mcp2517fd_priv {
 	 * used during setup and irq
 	 */
 	struct mutex spi_rxtx_lock;
-	u8 spi_tx[MCP2517FD_BUFFER_TXRX_SIZE];
-	u8 spi_rx[MCP2517FD_BUFFER_TXRX_SIZE];
+	u8 spi_tx[MCP25XXFD_BUFFER_TXRX_SIZE];
+	u8 spi_rx[MCP25XXFD_BUFFER_TXRX_SIZE];
 
 	/* structure for transmit fifo spi_messages */
 	struct mcp2517fd_trigger_tx_message *spi_transmit_fifos;
@@ -1117,7 +1117,7 @@ static int mcp2517fd_write_then_write(struct spi_device *spi,
 	u8 single_reg_data[6];
 	int ret;
 
-	if (tx_len + tx2_len > MCP2517FD_BUFFER_TXRX_SIZE)
+	if (tx_len + tx2_len > MCP25XXFD_BUFFER_TXRX_SIZE)
 		return -EINVAL;
 
 	memset(&xfer, 0, sizeof(xfer));
@@ -1345,11 +1345,11 @@ static int mcp2517fd_set_opmode(struct spi_device *spi, int mode,
 	 */
 	if (mode == CAN_CON_MODE_SLEEP) {
 		priv->regs.osc &= ~(
-			MCP2517FD_OSC_OSCRDY |
-			MCP2517FD_OSC_PLLRDY |
-			MCP2517FD_OSC_SCLKRDY
+			MCP25XXFD_OSC_OSCRDY |
+			MCP25XXFD_OSC_PLLRDY |
+			MCP25XXFD_OSC_SCLKRDY
 			);
-		priv->regs.osc |= MCP2517FD_OSC_OSCDIS;
+		priv->regs.osc |= MCP25XXFD_OSC_OSCDIS;
 	}
 
 	/* but only write the relevant section */
@@ -1380,24 +1380,24 @@ static int mcp2517fd_set_normal_opmode(struct spi_device *spi)
 static int mcp2517fd_wake_from_sleep(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	u32 waitfor = MCP2517FD_OSC_OSCRDY;
-	u32 mask = waitfor | MCP2517FD_OSC_OSCDIS;
+	u32 waitfor = MCP25XXFD_OSC_OSCRDY;
+	u32 mask = waitfor | MCP25XXFD_OSC_OSCDIS;
 	unsigned long timeout;
 	int ret;
 
 	/* write clock with OSCDIS cleared*/
-	priv->regs.osc &= ~MCP2517FD_OSC_OSCDIS;
+	priv->regs.osc &= ~MCP25XXFD_OSC_OSCDIS;
 	ret = mcp2517fd_cmd_write(
-		spi, MCP2517FD_OSC,
+		spi, MCP25XXFD_OSC,
 		priv->regs.osc,
 		priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
 	/* wait for synced pll/osc/sclk */
-	timeout = jiffies + MCP2517FD_OSC_POLLING_JIFFIES;
+	timeout = jiffies + MCP25XXFD_OSC_POLLING_JIFFIES;
 	while (time_before_eq(jiffies, timeout)) {
-		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+		ret = mcp2517fd_cmd_read(spi, MCP25XXFD_OSC,
 					 &priv->regs.osc,
 					 priv->spi_setup_speed_hz);
 		if (ret)
@@ -1424,7 +1424,7 @@ static int mcp2517fd_hw_check_clock(struct spi_device *spi)
 	/* read the osc register and check if it matches
 	 * what we have on record
 	 */
-	ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+	ret = mcp2517fd_cmd_read(spi, MCP25XXFD_OSC,
 				 &val,
 				 priv->spi_setup_speed_hz);
 	if (ret)
@@ -1517,7 +1517,7 @@ static int mcp2517fd_gpio_request(struct gpio_chip *chip,
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	int clock_requestor = offset ?
-		MCP2517FD_CLK_USER_GPIO1 : MCP2517FD_CLK_USER_GPIO0;
+		MCP25XXFD_CLK_USER_GPIO1 : MCP25XXFD_CLK_USER_GPIO0;
 
 	/* only handle gpio 0/1 */
 	if (offset > 1)
@@ -1533,7 +1533,7 @@ static void mcp2517fd_gpio_free(struct gpio_chip *chip,
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	int clock_requestor = offset ?
-		MCP2517FD_CLK_USER_GPIO1 : MCP2517FD_CLK_USER_GPIO0;
+		MCP25XXFD_CLK_USER_GPIO1 : MCP25XXFD_CLK_USER_GPIO0;
 
 	/* only handle gpio 0/1 */
 	if (offset > 1)
@@ -1545,7 +1545,7 @@ static void mcp2517fd_gpio_free(struct gpio_chip *chip,
 static int mcp2517fd_gpio_get(struct gpio_chip *chip, unsigned int offset)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
-	u32 mask = (offset) ? MCP2517FD_IOCON_GPIO1 : MCP2517FD_IOCON_GPIO0;
+	u32 mask = (offset) ? MCP25XXFD_IOCON_GPIO1 : MCP25XXFD_IOCON_GPIO0;
 	int ret;
 
 	/* only handle gpio 0/1 */
@@ -1553,7 +1553,7 @@ static int mcp2517fd_gpio_get(struct gpio_chip *chip, unsigned int offset)
 		return -EINVAL;
 
 	/* read the relevant gpio Latch */
-	ret = mcp2517fd_cmd_read_mask(priv->spi, MCP2517FD_IOCON,
+	ret = mcp2517fd_cmd_read_mask(priv->spi, MCP25XXFD_IOCON,
 				      &priv->regs.iocon, mask,
 				      priv->spi_setup_speed_hz);
 	if (ret)
@@ -1567,7 +1567,7 @@ static void mcp2517fd_gpio_set(struct gpio_chip *chip, unsigned int offset,
 			       int value)
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
-	u32 mask = (offset) ? MCP2517FD_IOCON_LAT1 : MCP2517FD_IOCON_LAT0;
+	u32 mask = (offset) ? MCP25XXFD_IOCON_LAT1 : MCP25XXFD_IOCON_LAT0;
 
 	/* only handle gpio 0/1 */
 	if (offset > 1)
@@ -1579,7 +1579,7 @@ static void mcp2517fd_gpio_set(struct gpio_chip *chip, unsigned int offset,
 	else
 		priv->regs.iocon &= ~mask;
 
-	mcp2517fd_cmd_write_mask(priv->spi, MCP2517FD_IOCON,
+	mcp2517fd_cmd_write_mask(priv->spi, MCP25XXFD_IOCON,
 				 priv->regs.iocon, mask,
 				 priv->spi_setup_speed_hz);
 }
@@ -1589,11 +1589,11 @@ static int mcp2517fd_gpio_direction_input(struct gpio_chip *chip,
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	u32 mask_tri = (offset) ?
-		MCP2517FD_IOCON_TRIS1 : MCP2517FD_IOCON_TRIS0;
+		MCP25XXFD_IOCON_TRIS1 : MCP25XXFD_IOCON_TRIS0;
 	u32 mask_stby = (offset) ?
-		0 : MCP2517FD_IOCON_XSTBYEN;
+		0 : MCP25XXFD_IOCON_XSTBYEN;
 	u32 mask_pm = (offset) ?
-		MCP2517FD_IOCON_PM1 : MCP2517FD_IOCON_PM0;
+		MCP25XXFD_IOCON_PM1 : MCP25XXFD_IOCON_PM0;
 
 	/* only handle gpio 0/1 */
 	if (offset > 1)
@@ -1605,7 +1605,7 @@ static int mcp2517fd_gpio_direction_input(struct gpio_chip *chip,
 	/* clear stby */
 	priv->regs.iocon &= ~mask_stby;
 
-	return mcp2517fd_cmd_write_mask(priv->spi, MCP2517FD_IOCON,
+	return mcp2517fd_cmd_write_mask(priv->spi, MCP25XXFD_IOCON,
 					priv->regs.iocon,
 					mask_tri | mask_stby | mask_pm,
 					priv->spi_setup_speed_hz);
@@ -1616,13 +1616,13 @@ static int mcp2517fd_gpio_direction_output(struct gpio_chip *chip,
 {
 	struct mcp2517fd_priv *priv = gpiochip_get_data(chip);
 	u32 mask_tri = (offset) ?
-		MCP2517FD_IOCON_TRIS1 : MCP2517FD_IOCON_TRIS0;
+		MCP25XXFD_IOCON_TRIS1 : MCP25XXFD_IOCON_TRIS0;
 	u32 mask_lat = (offset) ?
-		MCP2517FD_IOCON_LAT1 : MCP2517FD_IOCON_LAT0;
+		MCP25XXFD_IOCON_LAT1 : MCP25XXFD_IOCON_LAT0;
 	u32 mask_pm = (offset) ?
-		MCP2517FD_IOCON_PM1 : MCP2517FD_IOCON_PM0;
+		MCP25XXFD_IOCON_PM1 : MCP25XXFD_IOCON_PM0;
 	u32 mask_stby = (offset) ?
-		0 : MCP2517FD_IOCON_XSTBYEN;
+		0 : MCP25XXFD_IOCON_XSTBYEN;
 
 	/* only handle gpio 0/1 */
 	if (offset > 1)
@@ -1641,7 +1641,7 @@ static int mcp2517fd_gpio_direction_output(struct gpio_chip *chip,
 		priv->regs.iocon &= ~mask_lat;
 
 	return mcp2517fd_cmd_write_mask(
-		priv->spi, MCP2517FD_IOCON,
+		priv->spi, MCP25XXFD_IOCON,
 		priv->regs.iocon,
 		mask_tri | mask_lat | mask_pm | mask_stby,
 		priv->spi_setup_speed_hz);
@@ -1696,27 +1696,27 @@ static const struct pinctrl_pin_desc mcp2517fd_gpio_pins[] = {
 };
 
 enum mcp2517fd_fsel {
-	MCP2517FD_FSEL_GPIO_IN = 0,
-	MCP2517FD_FSEL_GPIO_OUT = 1,
-	MCP2517FD_FSEL_INT_TXIF = 2,
-	MCP2517FD_FSEL_INT_RXIF = 3,
-	MCP2517FD_FSEL_INT = 4,
-	MCP2517FD_FSEL_XSTANDBY = 5,
-	MCP2517FD_FSEL_SOF = 6,
-	MCP2517FD_FSEL_TXCAN = 7,
-	MCP2517FD_FSEL_CLKO = 8,
+	MCP25XXFD_FSEL_GPIO_IN = 0,
+	MCP25XXFD_FSEL_GPIO_OUT = 1,
+	MCP25XXFD_FSEL_INT_TXIF = 2,
+	MCP25XXFD_FSEL_INT_RXIF = 3,
+	MCP25XXFD_FSEL_INT = 4,
+	MCP25XXFD_FSEL_XSTANDBY = 5,
+	MCP25XXFD_FSEL_SOF = 6,
+	MCP25XXFD_FSEL_TXCAN = 7,
+	MCP25XXFD_FSEL_CLKO = 8,
 };
 
 static const char * const mcp2517fd_gpio_functions[] = {
-	[MCP2517FD_FSEL_GPIO_IN] = "gpio_in",
-	[MCP2517FD_FSEL_GPIO_OUT] = "gpio_out",
-	[MCP2517FD_FSEL_INT_TXIF] = "int_txif",
-	[MCP2517FD_FSEL_INT_RXIF] = "int_rxif",
-	[MCP2517FD_FSEL_INT] = "int",
-	[MCP2517FD_FSEL_XSTANDBY] = "xstandby",
-	[MCP2517FD_FSEL_SOF] = "sof",
-	[MCP2517FD_FSEL_TXCAN] = "txcan",
-	[MCP2517FD_FSEL_CLKO] = "clko",
+	[MCP25XXFD_FSEL_GPIO_IN] = "gpio_in",
+	[MCP25XXFD_FSEL_GPIO_OUT] = "gpio_out",
+	[MCP25XXFD_FSEL_INT_TXIF] = "int_txif",
+	[MCP25XXFD_FSEL_INT_RXIF] = "int_rxif",
+	[MCP25XXFD_FSEL_INT] = "int",
+	[MCP25XXFD_FSEL_XSTANDBY] = "xstandby",
+	[MCP25XXFD_FSEL_SOF] = "sof",
+	[MCP25XXFD_FSEL_TXCAN] = "txcan",
+	[MCP25XXFD_FSEL_CLKO] = "clko",
 };
 
 #define FUNCTION2GROUP(label, ...)			\
@@ -1762,35 +1762,35 @@ static int mcp2517fd_pctl_get_func(struct pinctrl_dev *pctldev,
 
 	switch (offset) {
 	case 0: /* gpio0 */
-		if (priv->regs.iocon & MCP2517FD_IOCON_PM0) {
-			if (priv->regs.iocon & MCP2517FD_IOCON_TRIS0)
-				return MCP2517FD_FSEL_GPIO_IN;
+		if (priv->regs.iocon & MCP25XXFD_IOCON_PM0) {
+			if (priv->regs.iocon & MCP25XXFD_IOCON_TRIS0)
+				return MCP25XXFD_FSEL_GPIO_IN;
 			else
-				return MCP2517FD_FSEL_GPIO_OUT;
+				return MCP25XXFD_FSEL_GPIO_OUT;
 		} else {
-			if (priv->regs.iocon & MCP2517FD_IOCON_XSTBYEN)
-				return MCP2517FD_FSEL_XSTANDBY;
+			if (priv->regs.iocon & MCP25XXFD_IOCON_XSTBYEN)
+				return MCP25XXFD_FSEL_XSTANDBY;
 			else
-				return MCP2517FD_FSEL_INT_TXIF;
+				return MCP25XXFD_FSEL_INT_TXIF;
 		}
 	case 1: /* gpio1 */
-		if (priv->regs.iocon & MCP2517FD_IOCON_PM1) {
-			if (priv->regs.iocon & MCP2517FD_IOCON_TRIS1)
-				return MCP2517FD_FSEL_GPIO_IN;
+		if (priv->regs.iocon & MCP25XXFD_IOCON_PM1) {
+			if (priv->regs.iocon & MCP25XXFD_IOCON_TRIS1)
+				return MCP25XXFD_FSEL_GPIO_IN;
 			else
-				return MCP2517FD_FSEL_GPIO_OUT;
+				return MCP25XXFD_FSEL_GPIO_OUT;
 		} else {
-			return MCP2517FD_FSEL_INT_RXIF;
+			return MCP25XXFD_FSEL_INT_RXIF;
 		}
 	case 2: /* clkout/SOF */
-		if (priv->regs.iocon & MCP2517FD_IOCON_SOF)
-			return MCP2517FD_FSEL_SOF;
+		if (priv->regs.iocon & MCP25XXFD_IOCON_SOF)
+			return MCP25XXFD_FSEL_SOF;
 		else
-			return MCP2517FD_FSEL_CLKO;
+			return MCP25XXFD_FSEL_CLKO;
 	case 3: /* int */
-		return MCP2517FD_FSEL_INT;
+		return MCP25XXFD_FSEL_INT;
 	case 4: /* txcan */
-		return MCP2517FD_FSEL_TXCAN;
+		return MCP25XXFD_FSEL_TXCAN;
 	default:
 		return -EINVAL;
 	}
@@ -1803,9 +1803,9 @@ static int mcp2517fd_pctl_get_value(struct pinctrl_dev *pctldev,
 
 	switch (offset) {
 	case 0: /* gpio0 */
-		return priv->regs.iocon & MCP2517FD_IOCON_GPIO0 ? 1 : 0;
+		return priv->regs.iocon & MCP25XXFD_IOCON_GPIO0 ? 1 : 0;
 	case 1: /* gpio1 */
-		return priv->regs.iocon & MCP2517FD_IOCON_GPIO1 ? 1 : 0;
+		return priv->regs.iocon & MCP25XXFD_IOCON_GPIO1 ? 1 : 0;
 	default: /* all others give no value */
 		return -EINVAL;
 	}
@@ -1818,11 +1818,11 @@ static char *mcp2517fd_pctl_get_drive(struct pinctrl_dev *pctldev,
 
 	switch (offset) {
 	case 4: /* txcan */
-		if (priv->regs.iocon & MCP2517FD_IOCON_TXCANOD)
+		if (priv->regs.iocon & MCP25XXFD_IOCON_TXCANOD)
 			return "open drain";
 		break;
 	default:
-		if (priv->regs.iocon & MCP2517FD_IOCON_INTOD)
+		if (priv->regs.iocon & MCP25XXFD_IOCON_INTOD)
 			return "open drain";
 		break;
 	}
@@ -1839,7 +1839,7 @@ static void mcp2517fd_pctl_pin_dbg_show(struct pinctrl_dev *pctldev,
 	char const *type, *fname, *val;
 
 	/* read the register */
-	ret = mcp2517fd_cmd_read(priv->spi, MCP2517FD_IOCON,
+	ret = mcp2517fd_cmd_read(priv->spi, MCP25XXFD_IOCON,
 				 &priv->regs.iocon,
 				 priv->spi_setup_speed_hz);
 	if (ret)
@@ -1900,29 +1900,29 @@ static int mcp2517fd_pmx_get_function_groups(struct pinctrl_dev *pctldev,
 	} while (0)
 
 	switch (selector) {
-	case MCP2517FD_FSEL_GPIO_IN:
-	case MCP2517FD_FSEL_GPIO_OUT:
+	case MCP25XXFD_FSEL_GPIO_IN:
+	case MCP25XXFD_FSEL_GPIO_OUT:
 		ASSIGN_GROUPS_NUM(gpio);
 		break;
-	case MCP2517FD_FSEL_INT_TXIF:
+	case MCP25XXFD_FSEL_INT_TXIF:
 		ASSIGN_GROUPS_NUM(int_txif);
 		break;
-	case MCP2517FD_FSEL_INT_RXIF:
+	case MCP25XXFD_FSEL_INT_RXIF:
 		ASSIGN_GROUPS_NUM(int_rxif);
 		break;
-	case MCP2517FD_FSEL_INT:
+	case MCP25XXFD_FSEL_INT:
 		ASSIGN_GROUPS_NUM(int);
 		break;
-	case MCP2517FD_FSEL_XSTANDBY:
+	case MCP25XXFD_FSEL_XSTANDBY:
 		ASSIGN_GROUPS_NUM(xstandby);
 		break;
-	case MCP2517FD_FSEL_SOF:
+	case MCP25XXFD_FSEL_SOF:
 		ASSIGN_GROUPS_NUM(sof);
 		break;
-	case MCP2517FD_FSEL_TXCAN:
+	case MCP25XXFD_FSEL_TXCAN:
 		ASSIGN_GROUPS_NUM(txcan);
 		break;
-	case MCP2517FD_FSEL_CLKO:
+	case MCP25XXFD_FSEL_CLKO:
 		ASSIGN_GROUPS_NUM(clko);
 		break;
 	default:
@@ -1936,23 +1936,23 @@ static int mcp2517fd_pmx_set_gpio0(struct pinctrl_dev *pctldev,
 				   unsigned int func_selector)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
-	u32 mask = MCP2517FD_IOCON_PM0 |
-		MCP2517FD_IOCON_TRIS0 |
-		MCP2517FD_IOCON_XSTBYEN;
+	u32 mask = MCP25XXFD_IOCON_PM0 |
+		MCP25XXFD_IOCON_TRIS0 |
+		MCP25XXFD_IOCON_XSTBYEN;
 	u32 val = priv->regs.iocon & (~mask);
 
 	/* and set one depending on requested mode */
 	switch (func_selector) {
-	case MCP2517FD_FSEL_GPIO_IN:
-		val |= MCP2517FD_IOCON_PM0 | MCP2517FD_IOCON_TRIS0;
+	case MCP25XXFD_FSEL_GPIO_IN:
+		val |= MCP25XXFD_IOCON_PM0 | MCP25XXFD_IOCON_TRIS0;
 		break;
-	case MCP2517FD_FSEL_GPIO_OUT:
-		val |= MCP2517FD_IOCON_PM0;
+	case MCP25XXFD_FSEL_GPIO_OUT:
+		val |= MCP25XXFD_IOCON_PM0;
 		break;
-	case MCP2517FD_FSEL_INT_TXIF:
+	case MCP25XXFD_FSEL_INT_TXIF:
 		break;
-	case MCP2517FD_FSEL_XSTANDBY:
-		val |= MCP2517FD_IOCON_XSTBYEN;
+	case MCP25XXFD_FSEL_XSTANDBY:
+		val |= MCP25XXFD_IOCON_XSTBYEN;
 		break;
 	default:
 		return -EINVAL;
@@ -1961,7 +1961,7 @@ static int mcp2517fd_pmx_set_gpio0(struct pinctrl_dev *pctldev,
 	/* assign and set */
 	priv->regs.iocon = val;
 
-	return mcp2517fd_cmd_write(priv->spi, MCP2517FD_IOCON,
+	return mcp2517fd_cmd_write(priv->spi, MCP25XXFD_IOCON,
 				   priv->regs.iocon,
 				   priv->spi_setup_speed_hz);
 }
@@ -1970,19 +1970,19 @@ static int mcp2517fd_pmx_set_gpio1(struct pinctrl_dev *pctldev,
 				   unsigned int func_selector)
 {
 	struct mcp2517fd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
-	u32 mask = MCP2517FD_IOCON_PM1 |
-		MCP2517FD_IOCON_TRIS1;
+	u32 mask = MCP25XXFD_IOCON_PM1 |
+		MCP25XXFD_IOCON_TRIS1;
 	u32 val = priv->regs.iocon & (~mask);
 
 	/* and set one depending on requested mode */
 	switch (func_selector) {
-	case MCP2517FD_FSEL_GPIO_IN:
-		val |= MCP2517FD_IOCON_PM1 | MCP2517FD_IOCON_TRIS1;
+	case MCP25XXFD_FSEL_GPIO_IN:
+		val |= MCP25XXFD_IOCON_PM1 | MCP25XXFD_IOCON_TRIS1;
 		break;
-	case MCP2517FD_FSEL_GPIO_OUT:
-		val |= MCP2517FD_IOCON_PM1;
+	case MCP25XXFD_FSEL_GPIO_OUT:
+		val |= MCP25XXFD_IOCON_PM1;
 		break;
-	case MCP2517FD_FSEL_INT_RXIF:
+	case MCP25XXFD_FSEL_INT_RXIF:
 		break;
 	default:
 		return -EINVAL;
@@ -1991,7 +1991,7 @@ static int mcp2517fd_pmx_set_gpio1(struct pinctrl_dev *pctldev,
 	/* assign and set */
 	priv->regs.iocon = val;
 
-	return mcp2517fd_cmd_write(priv->spi, MCP2517FD_IOCON,
+	return mcp2517fd_cmd_write(priv->spi, MCP25XXFD_IOCON,
 				   priv->regs.iocon,
 				   priv->spi_setup_speed_hz);
 }
@@ -2003,17 +2003,17 @@ static int mcp2517fd_pmx_set_clko(struct pinctrl_dev *pctldev,
 
 	/* and set one depending on requested mode */
 	switch (func_selector) {
-	case MCP2517FD_FSEL_SOF:
-		priv->regs.iocon |= MCP2517FD_IOCON_SOF;
+	case MCP25XXFD_FSEL_SOF:
+		priv->regs.iocon |= MCP25XXFD_IOCON_SOF;
 		break;
-	case MCP2517FD_FSEL_CLKO:
-		priv->regs.iocon &= ~MCP2517FD_IOCON_SOF;
+	case MCP25XXFD_FSEL_CLKO:
+		priv->regs.iocon &= ~MCP25XXFD_IOCON_SOF;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	return mcp2517fd_cmd_write(priv->spi, MCP2517FD_IOCON,
+	return mcp2517fd_cmd_write(priv->spi, MCP25XXFD_IOCON,
 				   priv->regs.iocon,
 				   priv->spi_setup_speed_hz);
 }
@@ -2030,11 +2030,11 @@ static int mcp2517fd_pmx_set(struct pinctrl_dev *pctldev,
 	case 2: /* clko */
 		return mcp2517fd_pmx_set_clko(pctldev, func_selector);
 	case 3: /* int */
-		if (func_selector != MCP2517FD_FSEL_INT)
+		if (func_selector != MCP25XXFD_FSEL_INT)
 			return -EINVAL;
 		return 0;
 	case 4: /* txcan */
-		if (func_selector != MCP2517FD_FSEL_TXCAN)
+		if (func_selector != MCP25XXFD_FSEL_TXCAN)
 			return -EINVAL;
 		return 0;
 	default:
@@ -2054,11 +2054,11 @@ static int mcp2517fd_pinconf_get(struct pinctrl_dev *pctldev,
 	case 1: /* gpio1 */
 	case 2: /* clko */
 	case 3: /* int */
-		*config = (priv->regs.iocon & MCP2517FD_IOCON_INTOD) ?
+		*config = (priv->regs.iocon & MCP25XXFD_IOCON_INTOD) ?
 			1 : 0;
 		return 0;
 	case 4: /* txcan */
-		*config = (priv->regs.iocon & MCP2517FD_IOCON_TXCANOD) ?
+		*config = (priv->regs.iocon & MCP25XXFD_IOCON_TXCANOD) ?
 			1 : 0;
 		return 0;
 	default:
@@ -2085,15 +2085,15 @@ static int mcp2517fd_pinconf_set(struct pinctrl_dev *pctldev,
 			 * all GPIO request the same type
 			 */
 			if (configs[i])
-				priv->regs.iocon |= MCP2517FD_IOCON_INTOD;
+				priv->regs.iocon |= MCP25XXFD_IOCON_INTOD;
 			else
-				priv->regs.iocon &= ~MCP2517FD_IOCON_INTOD;
+				priv->regs.iocon &= ~MCP25XXFD_IOCON_INTOD;
 			break;
 		case 4: /* txcan */
 			if (configs[i])
-				priv->regs.iocon |= MCP2517FD_IOCON_TXCANOD;
+				priv->regs.iocon |= MCP25XXFD_IOCON_TXCANOD;
 			else
-				priv->regs.iocon &= ~MCP2517FD_IOCON_TXCANOD;
+				priv->regs.iocon &= ~MCP25XXFD_IOCON_TXCANOD;
 			break;
 		default:
 			return -EINVAL;
@@ -2102,9 +2102,9 @@ static int mcp2517fd_pinconf_set(struct pinctrl_dev *pctldev,
 
 	return mcp2517fd_cmd_write_mask(
 		priv->spi,
-		MCP2517FD_IOCON,
+		MCP25XXFD_IOCON,
 		priv->regs.iocon,
-		MCP2517FD_IOCON_INTOD | MCP2517FD_IOCON_TXCANOD,
+		MCP25XXFD_IOCON_INTOD | MCP25XXFD_IOCON_TXCANOD,
 		priv->spi_setup_speed_hz);
 }
 
@@ -3321,21 +3321,21 @@ static int mcp2517fd_can_ist_handle_eccif(struct spi_device *spi)
 	priv->can_err_data[1] |= CAN_ERR_CRTL_UNSPEC;
 
 	/* read ECC status register */
-	ret = mcp2517fd_cmd_read(spi, MCP2517FD_ECCSTAT, &val,
+	ret = mcp2517fd_cmd_read(spi, MCP25XXFD_ECCSTAT, &val,
 				 priv->spi_speed_hz);
 	if (ret)
 		return ret;
 
-	addr = (val & MCP2517FD_ECCSTAT_ERRADDR_MASK) >>
-		MCP2517FD_ECCSTAT_ERRADDR_SHIFT;
+	addr = (val & MCP25XXFD_ECCSTAT_ERRADDR_MASK) >>
+		MCP25XXFD_ECCSTAT_ERRADDR_SHIFT;
 
 	dev_err_ratelimited(&spi->dev,
 			    "ECC %s bit error at %03x\n",
-			    (val & MCP2517FD_ECCSTAT_DEDIF) ?
+			    (val & MCP25XXFD_ECCSTAT_DEDIF) ?
 			    "double" : "single",
 			    addr);
 
-	return mcp2517fd_cmd_write(spi, MCP2517FD_ECCSTAT, 0,
+	return mcp2517fd_cmd_write(spi, MCP25XXFD_ECCSTAT, 0,
 				 priv->spi_speed_hz);
 }
 
@@ -3459,7 +3459,7 @@ static int mcp2517fd_enable_interrupts(struct spi_device *spi,
 
 static int mcp2517fd_hw_wake(struct spi_device *spi)
 {
-	return mcp2517fd_start_clock(spi, MCP2517FD_CLK_USER_CAN);
+	return mcp2517fd_start_clock(spi, MCP25XXFD_CLK_USER_CAN);
 }
 
 static void mcp2517fd_hw_sleep(struct spi_device *spi)
@@ -3470,7 +3470,7 @@ static void mcp2517fd_hw_sleep(struct spi_device *spi)
 	mcp2517fd_disable_interrupts(spi, priv->spi_setup_speed_hz);
 
 	/* stop the clocks */
-	mcp2517fd_stop_clock(spi, MCP2517FD_CLK_USER_CAN);
+	mcp2517fd_stop_clock(spi, MCP25XXFD_CLK_USER_CAN);
 }
 
 static int mcp2517fd_can_ist_handle_status(struct spi_device *spi)
@@ -3804,16 +3804,16 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 	int ret;
 
 	/* Wait for oscillator startup timer after power up */
-	mdelay(MCP2517FD_OST_DELAY_MS);
+	mdelay(MCP25XXFD_OST_DELAY_MS);
 
 	/* send a "blind" reset, hoping we are in Config mode */
 	mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
 
 	/* Wait for oscillator startup again */
-	mdelay(MCP2517FD_OST_DELAY_MS);
+	mdelay(MCP25XXFD_OST_DELAY_MS);
 
 	/* check clock register that the clock is ready or disabled */
-	ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+	ret = mcp2517fd_cmd_read(spi, MCP25XXFD_OSC,
 				 &priv->regs.osc,
 				 priv->spi_setup_speed_hz);
 	if (ret)
@@ -3821,10 +3821,10 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 
 	/* there can only be one... */
 	switch (priv->regs.osc &
-		(MCP2517FD_OSC_OSCRDY | MCP2517FD_OSC_OSCDIS)) {
-	case MCP2517FD_OSC_OSCRDY: /* either the clock is ready */
+		(MCP25XXFD_OSC_OSCRDY | MCP25XXFD_OSC_OSCDIS)) {
+	case MCP25XXFD_OSC_OSCRDY: /* either the clock is ready */
 		break;
-	case MCP2517FD_OSC_OSCDIS: /* or the clock is disabled */
+	case MCP25XXFD_OSC_OSCDIS: /* or the clock is disabled */
 		/* wakeup sleeping system */
 		ret = mcp2517fd_wake_from_sleep(spi);
 		if (ret)
@@ -3833,7 +3833,7 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 		mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
 
 		/* Wait for oscillator startup again */
-		mdelay(MCP2517FD_OST_DELAY_MS);
+		mdelay(MCP25XXFD_OST_DELAY_MS);
 		break;
 	default:
 		/* otherwise there is no valid device (or in strange state)
@@ -3845,8 +3845,8 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 		 * about such a possibility
 		 */
 		if ((priv->regs.osc &
-		     (MCP2517FD_OSC_PLLEN | MCP2517FD_OSC_PLLRDY))
-		    == MCP2517FD_OSC_PLLEN)
+		     (MCP25XXFD_OSC_PLLEN | MCP25XXFD_OSC_PLLRDY))
+		    == MCP25XXFD_OSC_PLLEN)
 			dev_err(&spi->dev,
 				"mcp2517fd may be in a strange state - a power disconnect may be required\n");
 
@@ -3887,13 +3887,13 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 		return ret;
 
 	/* delay some time */
-	mdelay(MCP2517FD_OST_DELAY_MS);
+	mdelay(MCP25XXFD_OST_DELAY_MS);
 
 	/* reset can controller */
 	mcp2517fd_cmd_reset(spi, priv->spi_setup_speed_hz);
 
 	/* delay some time */
-	mdelay(MCP2517FD_OST_DELAY_MS);
+	mdelay(MCP25XXFD_OST_DELAY_MS);
 
 	/* read CON register and match a final time */
 	ret = mcp2517fd_cmd_read(spi, CAN_CON,
@@ -3914,36 +3914,36 @@ static int mcp2517fd_hw_probe(struct spi_device *spi)
 static int mcp2517fd_setup_osc(struct spi_device *spi)
 {
 	struct mcp2517fd_priv *priv = spi_get_drvdata(spi);
-	int val = ((priv->config.clock_pll) ? MCP2517FD_OSC_PLLEN : 0)
-		| ((priv->config.clock_div2) ? MCP2517FD_OSC_SCLKDIV : 0);
-	int waitfor = ((priv->config.clock_pll) ? MCP2517FD_OSC_PLLRDY : 0)
-		| ((priv->config.clock_div2) ? MCP2517FD_OSC_SCLKRDY : 0)
-		| MCP2517FD_OSC_OSCRDY;
+	int val = ((priv->config.clock_pll) ? MCP25XXFD_OSC_PLLEN : 0)
+		| ((priv->config.clock_div2) ? MCP25XXFD_OSC_SCLKDIV : 0);
+	int waitfor = ((priv->config.clock_pll) ? MCP25XXFD_OSC_PLLRDY : 0)
+		| ((priv->config.clock_div2) ? MCP25XXFD_OSC_SCLKRDY : 0)
+		| MCP25XXFD_OSC_OSCRDY;
 	int ret;
 	unsigned long timeout;
 
 	/* manage clock_out divider */
 	switch (priv->config.clock_odiv) {
 	case 10:
-		val |= (MCP2517FD_OSC_CLKODIV_10)
-			<< MCP2517FD_OSC_CLKODIV_SHIFT;
+		val |= (MCP25XXFD_OSC_CLKODIV_10)
+			<< MCP25XXFD_OSC_CLKODIV_SHIFT;
 		break;
 	case 4:
-		val |= (MCP2517FD_OSC_CLKODIV_4)
-			<< MCP2517FD_OSC_CLKODIV_SHIFT;
+		val |= (MCP25XXFD_OSC_CLKODIV_4)
+			<< MCP25XXFD_OSC_CLKODIV_SHIFT;
 		break;
 	case 2:
-		val |= (MCP2517FD_OSC_CLKODIV_2)
-			<< MCP2517FD_OSC_CLKODIV_SHIFT;
+		val |= (MCP25XXFD_OSC_CLKODIV_2)
+			<< MCP25XXFD_OSC_CLKODIV_SHIFT;
 		break;
 	case 1:
-		val |= (MCP2517FD_OSC_CLKODIV_1)
-			<< MCP2517FD_OSC_CLKODIV_SHIFT;
+		val |= (MCP25XXFD_OSC_CLKODIV_1)
+			<< MCP25XXFD_OSC_CLKODIV_SHIFT;
 		break;
 	case 0:
 		/* this means implicitly SOF output */
-		val |= (MCP2517FD_OSC_CLKODIV_10)
-			<< MCP2517FD_OSC_CLKODIV_SHIFT;
+		val |= (MCP25XXFD_OSC_CLKODIV_10)
+			<< MCP25XXFD_OSC_CLKODIV_SHIFT;
 		break;
 	default:
 		dev_err(&spi->dev,
@@ -3953,15 +3953,15 @@ static int mcp2517fd_setup_osc(struct spi_device *spi)
 	}
 
 	/* write clock */
-	ret = mcp2517fd_cmd_write(spi, MCP2517FD_OSC, val,
+	ret = mcp2517fd_cmd_write(spi, MCP25XXFD_OSC, val,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
 
 	/* wait for synced pll/osc/sclk */
-	timeout = jiffies + MCP2517FD_OSC_POLLING_JIFFIES;
+	timeout = jiffies + MCP25XXFD_OSC_POLLING_JIFFIES;
 	while (time_before_eq(jiffies, timeout)) {
-		ret = mcp2517fd_cmd_read(spi, MCP2517FD_OSC,
+		ret = mcp2517fd_cmd_read(spi, MCP25XXFD_OSC,
 					 &priv->regs.osc,
 					 priv->spi_setup_speed_hz);
 		if (ret)
@@ -4063,7 +4063,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 		);
 	/* check that we are not exceeding memory limits with 1 RX buffer */
 	if (tx_memory_used + (sizeof(struct mcp2517fd_obj_rx) +
-		   priv->fifos.payload_size) > MCP2517FD_BUFFER_TXRX_SIZE) {
+		   priv->fifos.payload_size) > MCP25XXFD_BUFFER_TXRX_SIZE) {
 		dev_err(&spi->dev,
 			"Configured %i tx-fifos exceeds available memory already\n",
 			priv->fifos.tx_fifos);
@@ -4071,7 +4071,7 @@ static int mcp2517fd_setup_fifo(struct net_device *net,
 	}
 
 	/* calculate possible amount of RX fifos */
-	available_memory = MCP2517FD_BUFFER_TXRX_SIZE - tx_memory_used;
+	available_memory = MCP25XXFD_BUFFER_TXRX_SIZE - tx_memory_used;
 
 	priv->fifos.rx_fifos = available_memory /
 		(sizeof(struct mcp2517fd_obj_rx) +
@@ -4249,10 +4249,10 @@ static int mcp2517fd_setup(struct net_device *net,
 		return ret;
 
 	/* set up RAM ECC */
-	priv->regs.ecccon = MCP2517FD_ECCCON_ECCEN |
-		MCP2517FD_ECCCON_SECIE |
-		MCP2517FD_ECCCON_DEDIE;
-	ret = mcp2517fd_cmd_write(spi, MCP2517FD_ECCCON,
+	priv->regs.ecccon = MCP25XXFD_ECCCON_ECCEN |
+		MCP25XXFD_ECCCON_SECIE |
+		MCP25XXFD_ECCCON_DEDIE;
+	ret = mcp2517fd_cmd_write(spi, MCP25XXFD_ECCCON,
 				  priv->regs.ecccon,
 				  priv->spi_setup_speed_hz);
 	if (ret)
@@ -4432,7 +4432,7 @@ static const struct net_device_ops mcp2517fd_netdev_ops = {
 static const struct of_device_id mcp2517fd_of_match[] = {
 	{
 		.compatible	= "microchip,mcp2517fd",
-		.data		= (void *)CAN_MCP2517FD,
+		.data		= (void *)CAN_MCP25XXFD,
 	},
 	{ }
 };
@@ -4441,7 +4441,7 @@ MODULE_DEVICE_TABLE(of, mcp2517fd_of_match);
 static const struct spi_device_id mcp2517fd_id_table[] = {
 	{
 		.name		= "mcp2517fd",
-		.driver_data	= (kernel_ulong_t)CAN_MCP2517FD,
+		.driver_data	= (kernel_ulong_t)CAN_MCP25XXFD,
 	},
 	{ }
 };
@@ -4470,8 +4470,8 @@ static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
 			   ((u32 *)data)[i]);
 	}
 
-	count = (MCP2517FD_ECCSTAT - MCP2517FD_OSC) / 4 + 1;
-	ret = mcp2517fd_cmd_readn(spi, MCP2517FD_OSC, data, 4 * count,
+	count = (MCP25XXFD_ECCSTAT - MCP25XXFD_OSC) / 4 + 1;
+	ret = mcp2517fd_cmd_readn(spi, MCP25XXFD_OSC, data, 4 * count,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
@@ -4479,7 +4479,7 @@ static int mcp2517fd_dump_regs(struct seq_file *file, void *offset)
 
 	for (i = 0; i < count; i++) {
 		seq_printf(file, "Reg 0x%03x = 0x%08x\n",
-			   MCP2517FD_OSC + 4 * i,
+			   MCP25XXFD_OSC + 4 * i,
 			   ((u32 *)data)[i]);
 	}
 
@@ -4721,13 +4721,13 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		return PTR_ERR(clk);
 
 	freq = clk_get_rate(clk);
-	if (freq < MCP2517FD_MIN_CLOCK_FREQUENCY ||
-	    freq > MCP2517FD_MAX_CLOCK_FREQUENCY) {
+	if (freq < MCP25XXFD_MIN_CLOCK_FREQUENCY ||
+	    freq > MCP25XXFD_MAX_CLOCK_FREQUENCY) {
 		dev_err(&spi->dev,
 			"Clock frequency %i is not in range [%i:%i]\n",
 			freq,
-			MCP2517FD_MIN_CLOCK_FREQUENCY,
-			MCP2517FD_MAX_CLOCK_FREQUENCY);
+			MCP25XXFD_MIN_CLOCK_FREQUENCY,
+			MCP25XXFD_MAX_CLOCK_FREQUENCY);
 		return -ERANGE;
 	}
 
@@ -4765,13 +4765,13 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	priv->net = net;
 	priv->clk = clk;
 
-	priv->clk_user_mask = MCP2517FD_CLK_USER_CAN;
+	priv->clk_user_mask = MCP25XXFD_CLK_USER_CAN;
 
 	mutex_init(&priv->clk_user_lock);
 	mutex_init(&priv->spi_rxtx_lock);
 
 	/* enable the clock and mark as enabled */
-	priv->clk_user_mask = MCP2517FD_CLK_USER_CAN;
+	priv->clk_user_mask = MCP25XXFD_CLK_USER_CAN;
 	ret = clk_prepare_enable(clk);
 	if (ret)
 		goto out_free;
@@ -4801,7 +4801,7 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	/* if we have a clock that is smaller then 4MHz, then enable the pll */
 	priv->config.clock_pll =
-		(freq <= MCP2517FD_AUTO_PLL_MAX_CLOCK_FREQUENCY);
+		(freq <= MCP25XXFD_AUTO_PLL_MAX_CLOCK_FREQUENCY);
 
 	/* check in device tree for overrrides */
 	ret = mcp2517fd_of_parse(priv);
@@ -4811,8 +4811,8 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 	/* decide on real can clock rate */
 	priv->can.clock.freq = freq;
 	if (priv->config.clock_pll) {
-		priv->can.clock.freq *= MCP2517FD_PLL_MULTIPLIER;
-		if (priv->can.clock.freq > MCP2517FD_MAX_CLOCK_FREQUENCY) {
+		priv->can.clock.freq *= MCP25XXFD_PLL_MULTIPLIER;
+		if (priv->can.clock.freq > MCP25XXFD_MAX_CLOCK_FREQUENCY) {
 			dev_err(&spi->dev,
 				"PLL clock frequency %i would exceed limit\n",
 				priv->can.clock.freq
@@ -4821,14 +4821,14 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 		}
 	}
 	if (priv->config.clock_div2)
-		priv->can.clock.freq /= MCP2517FD_SCLK_DIVIDER;
+		priv->can.clock.freq /= MCP25XXFD_SCLK_DIVIDER;
 
 	/* calclculate the clock frequencies to use */
 	priv->spi_setup_speed_hz = freq / 2;
 	priv->spi_speed_hz = priv->can.clock.freq / 2;
 	if (priv->config.clock_div2) {
-		priv->spi_setup_speed_hz /= MCP2517FD_SCLK_DIVIDER;
-		priv->spi_speed_hz /= MCP2517FD_SCLK_DIVIDER;
+		priv->spi_setup_speed_hz /= MCP25XXFD_SCLK_DIVIDER;
+		priv->spi_speed_hz /= MCP25XXFD_SCLK_DIVIDER;
 	}
 
 	if (spi->max_speed_hz) {
@@ -4881,13 +4881,13 @@ static int mcp2517fd_can_probe(struct spi_device *spi)
 
 	/* SOF/CLOCKOUT pin 3 */
 	if (priv->config.clock_odiv < 1)
-		priv->regs.iocon |= MCP2517FD_IOCON_SOF;
+		priv->regs.iocon |= MCP25XXFD_IOCON_SOF;
 
 	/* INT/GPIO (probably also clockout) as open drain */
 	if (priv->config.gpio_opendrain)
-		priv->regs.iocon |= MCP2517FD_IOCON_INTOD;
+		priv->regs.iocon |= MCP25XXFD_IOCON_INTOD;
 
-	ret = mcp2517fd_cmd_write(spi, MCP2517FD_IOCON, priv->regs.iocon,
+	ret = mcp2517fd_cmd_write(spi, MCP25XXFD_IOCON, priv->regs.iocon,
 				  priv->spi_setup_speed_hz);
 	if (ret)
 		return ret;
@@ -4911,7 +4911,7 @@ error_probe:
 	mcp2517fd_power_enable(priv->power, 0);
 
 out_clk:
-	mcp2517fd_stop_clock(spi, MCP2517FD_CLK_USER_CAN);
+	mcp2517fd_stop_clock(spi, MCP25XXFD_CLK_USER_CAN);
 
 out_free:
 	free_candev(net);
@@ -5001,5 +5001,5 @@ static struct spi_driver mcp2517fd_can_driver = {
 module_spi_driver(mcp2517fd_can_driver);
 
 MODULE_AUTHOR("Martin Sperl <kernel@martin.sperl.org>");
-MODULE_DESCRIPTION("Microchip 2517FD CAN driver");
+MODULE_DESCRIPTION("Microchip 25XXFD CAN driver");
 MODULE_LICENSE("GPL v2");
