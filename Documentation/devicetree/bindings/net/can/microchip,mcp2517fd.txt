@@ -1,4 +1,4 @@
-* Microchip MCP2517 stand-alone CAN controller device tree bindings
+* Microchip MCP25XXFD stand-alone CAN controller device tree bindings
 
 Required properties:
  - compatible: Should be one of the following:
@@ -18,13 +18,13 @@ Optional properties:
  - microchip,clock-out-div = <0|1|2|4|10>: Clock output pin divider
    			     		   0 = Start of Frame output
 					   default: 10
- - microchip,clock-div: divide the internal clock divider by 2
+ - microchip,clock-div: divide the internal clock by 2
  - gpio-open-drain: put int, gpio0, gpio1 in open-drain mode
    		    instead of default push-pull
 
 Example:
 	can0: can@0 {
-		compatible = "microchip,mcp2515";
+		compatible = "microchip,mcp2517fd";
 		reg = <0>;
 		clocks = <&clk24m>;
 		interrupt-parent = <&gpio4>;
