@@ -1512,6 +1512,15 @@ out:
 /* mcp25xxfd GPIO helper functions */
 #ifdef CONFIG_GPIOLIB
 
+enum mcp25xxfd_gpio_pins {
+	MCP25XXFD_GPIO_GPIO0 = 0,
+	MCP25XXFD_GPIO_GPIO1 = 1,
+	MCP25XXFD_GPIO_INT = 2,
+	MCP25XXFD_GPIO_CLKO = 3,
+	MCP25XXFD_GPIO_TXCAN = 4,
+};
+
+
 static int mcp25xxfd_gpio_request(struct gpio_chip *chip,
 				  unsigned int offset)
 {
@@ -1680,19 +1689,19 @@ static int mcp25xxfd_gpio_setup(struct spi_device *spi)
 #ifdef CONFIG_PINCTRL
 
 static const char * const mcp25xxfd_gpio_groups[] = {
-	"gpio0",
-	"gpio1",
-	"clko",
-	"int",
-	"txcan",
+	[MCP25XXFD_GPIO_GPIO0] = "gpio0",
+	[MCP25XXFD_GPIO_GPIO1] = "gpio1",
+	[MCP25XXFD_GPIO_CLKO] = "clko",
+	[MCP25XXFD_GPIO_INT] = "int",
+	[MCP25XXFD_GPIO_TXCAN] = "txcan",
 };
 
 static const struct pinctrl_pin_desc mcp25xxfd_gpio_pins[] = {
-	PINCTRL_PIN(0, "gpio0"),
-	PINCTRL_PIN(1, "gpio1"),
-	PINCTRL_PIN(2, "clko"),
-	PINCTRL_PIN(3, "int"),
-	PINCTRL_PIN(4, "txcan"),
+	PINCTRL_PIN(MCP25XXFD_GPIO_GPIO0, "gpio0"),
+	PINCTRL_PIN(MCP25XXFD_GPIO_GPIO1, "gpio1"),
+	PINCTRL_PIN(MCP25XXFD_GPIO_CLKO, "clko"),
+	PINCTRL_PIN(MCP25XXFD_GPIO_INT, "int"),
+	PINCTRL_PIN(MCP25XXFD_GPIO_TXCAN, "txcan"),
 };
 
 enum mcp25xxfd_fsel {
@@ -1761,7 +1770,7 @@ static int mcp25xxfd_pctl_get_func(struct pinctrl_dev *pctldev,
 	struct mcp25xxfd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
 	switch (offset) {
-	case 0: /* gpio0 */
+	case MCP25XXFD_GPIO_GPIO0:
 		if (priv->regs.iocon & MCP25XXFD_IOCON_PM0) {
 			if (priv->regs.iocon & MCP25XXFD_IOCON_TRIS0)
 				return MCP25XXFD_FSEL_GPIO_IN;
@@ -1773,7 +1782,7 @@ static int mcp25xxfd_pctl_get_func(struct pinctrl_dev *pctldev,
 			else
 				return MCP25XXFD_FSEL_INT_TXIF;
 		}
-	case 1: /* gpio1 */
+	case MCP25XXFD_GPIO_GPIO1:
 		if (priv->regs.iocon & MCP25XXFD_IOCON_PM1) {
 			if (priv->regs.iocon & MCP25XXFD_IOCON_TRIS1)
 				return MCP25XXFD_FSEL_GPIO_IN;
@@ -1782,14 +1791,14 @@ static int mcp25xxfd_pctl_get_func(struct pinctrl_dev *pctldev,
 		} else {
 			return MCP25XXFD_FSEL_INT_RXIF;
 		}
-	case 2: /* clkout/SOF */
+	case MCP25XXFD_GPIO_CLKO:
 		if (priv->regs.iocon & MCP25XXFD_IOCON_SOF)
 			return MCP25XXFD_FSEL_SOF;
 		else
 			return MCP25XXFD_FSEL_CLKO;
-	case 3: /* int */
+	case MCP25XXFD_GPIO_INT:
 		return MCP25XXFD_FSEL_INT;
-	case 4: /* txcan */
+	case MCP25XXFD_GPIO_TXCAN:
 		return MCP25XXFD_FSEL_TXCAN;
 	default:
 		return -EINVAL;
@@ -1802,9 +1811,9 @@ static int mcp25xxfd_pctl_get_value(struct pinctrl_dev *pctldev,
 	struct mcp25xxfd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
 	switch (offset) {
-	case 0: /* gpio0 */
+	case MCP25XXFD_GPIO_GPIO0:
 		return priv->regs.iocon & MCP25XXFD_IOCON_GPIO0 ? 1 : 0;
-	case 1: /* gpio1 */
+	case MCP25XXFD_GPIO_GPIO1:
 		return priv->regs.iocon & MCP25XXFD_IOCON_GPIO1 ? 1 : 0;
 	default: /* all others give no value */
 		return -EINVAL;
@@ -1817,7 +1826,7 @@ static char *mcp25xxfd_pctl_get_drive(struct pinctrl_dev *pctldev,
 	struct mcp25xxfd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
 	switch (offset) {
-	case 4: /* txcan */
+	case MCP25XXFD_GPIO_TXCAN:
 		if (priv->regs.iocon & MCP25XXFD_IOCON_TXCANOD)
 			return "open drain";
 		break;
@@ -2023,17 +2032,17 @@ static int mcp25xxfd_pmx_set(struct pinctrl_dev *pctldev,
 			     unsigned int group_selector)
 {
 	switch (group_selector) {
-	case 0: /* gpio0 */
+	case MCP25XXFD_GPIO_GPIO0:
 		return mcp25xxfd_pmx_set_gpio0(pctldev, func_selector);
-	case 1: /* gpio1 */
+	case MCP25XXFD_GPIO_GPIO1:
 		return mcp25xxfd_pmx_set_gpio1(pctldev, func_selector);
-	case 2: /* clko */
+	case MCP25XXFD_GPIO_CLKO:
 		return mcp25xxfd_pmx_set_clko(pctldev, func_selector);
-	case 3: /* int */
+	case MCP25XXFD_GPIO_INT:
 		if (func_selector != MCP25XXFD_FSEL_INT)
 			return -EINVAL;
 		return 0;
-	case 4: /* txcan */
+	case MCP25XXFD_GPIO_TXCAN:
 		if (func_selector != MCP25XXFD_FSEL_TXCAN)
 			return -EINVAL;
 		return 0;
@@ -2050,14 +2059,14 @@ static int mcp25xxfd_pinconf_get(struct pinctrl_dev *pctldev,
 	struct mcp25xxfd_priv *priv = pinctrl_dev_get_drvdata(pctldev);
 
 	switch (pin) {
-	case 0: /* gpio0 */
-	case 1: /* gpio1 */
-	case 2: /* clko */
-	case 3: /* int */
+	case MCP25XXFD_GPIO_GPIO0:
+	case MCP25XXFD_GPIO_GPIO1:
+	case MCP25XXFD_GPIO_CLKO:
+	case MCP25XXFD_GPIO_INT:
 		*config = (priv->regs.iocon & MCP25XXFD_IOCON_INTOD) ?
 			1 : 0;
 		return 0;
-	case 4: /* txcan */
+	case MCP25XXFD_GPIO_TXCAN:
 		*config = (priv->regs.iocon & MCP25XXFD_IOCON_TXCANOD) ?
 			1 : 0;
 		return 0;
@@ -2077,10 +2086,10 @@ static int mcp25xxfd_pinconf_set(struct pinctrl_dev *pctldev,
 
 	for (i = 0; i < num_configs; i++) {
 		switch (pin) {
-		case 0: /* gpio0 */
-		case 1: /* gpio1 */
-		case 2: /* clko */
-		case 3: /* int */
+		case MCP25XXFD_GPIO_GPIO0:
+		case MCP25XXFD_GPIO_GPIO1:
+		case MCP25XXFD_GPIO_CLKO:
+		case MCP25XXFD_GPIO_INT:
 			/* we may want to have something that checks that
 			 * all GPIO request the same type
 			 */
