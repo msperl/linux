@@ -626,10 +626,11 @@
 #define CAN_FIFOUA(x)			CAN_SFR_BASE(0x64 + 12 * (x - 1))
 #define CAN_FLTCON(x)			CAN_SFR_BASE(0x1D0 + (x & 0x1c))
 #  define CAN_FILCON_SHIFT(x)		((x & 3) * 8)
-#  define CAN_FILCON_BITS(x)		4
+#  define CAN_FILCON_BITS(x)		CAN_FILCON_BITS_
+#  define CAN_FILCON_BITS_		4
+	/* avoid macro reuse warning, so do not use GENMASK as above */
 #  define CAN_FILCON_MASK(x)					\
-	GENMASK(CAN_FILCON_SHIFT(x) + CAN_FILCON_BITS(x) - 1,	\
-		CAN_FILCON_SHIFT(x))
+	(GENMASK(CAN_FILCON_BITS_ - 1, 0) << CAN_FILCON_SHIFT(x))
 #  define CAN_FIFOCON_FLTEN(x)		BIT(7 + CAN_FILCON_SHIFT(x))
 #define CAN_FLTOBJ(x)			CAN_SFR_BASE(0x1F0 + 8 * x)
 #  define CAN_FILOBJ_SID_BITS		11
@@ -1519,7 +1520,6 @@ enum mcp25xxfd_gpio_pins {
 	MCP25XXFD_GPIO_CLKO = 3,
 	MCP25XXFD_GPIO_TXCAN = 4,
 };
-
 
 static int mcp25xxfd_gpio_request(struct gpio_chip *chip,
 				  unsigned int offset)
