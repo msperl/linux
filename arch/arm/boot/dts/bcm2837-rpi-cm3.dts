@@ -36,3 +36,40 @@
 	status = "okay";
 	bus-width = <4>;
 };
+
+&gpio {
+            can0_pins: can0_pins {
+                brcm,pins = <16 17 18>;
+                brcm,function = <0>; /* input */
+            };
+};
+
+&clocks {
+            /* external oscillator of mcp2517fd on SPI0.0 */
+            can0_osc: can0_osc {
+                compatible = "fixed-clock";
+                #clock-cells = <0>;
+                clock-frequency  = <4000000>;
+            };
+};
+
+&spi {
+       status = "okay";
+       pinctrl-names = "default";
+       pinctrl-0 = <&spi0_gpio7>;
+        can0: mcp2517fd@0 {
+                reg = <0>;
+                compatible = "microchip,mcp2517fd";
+                pinctrl-names = "default";
+                pinctrl-0 = <&can0_pins>;
+                spi-max-frequency = <12500000>;
+                interrupt-parent = <&gpio>;
+                interrupts = <16 0x8>;
+                clocks = <&can0_osc>;
+                microchip,clock_div = <1>;
+                microchip,clock_out_div = <10>;
+                microchip,gpio0_mode = <1>; /* TX-interrupt output */
+                microchip,gpio1_mode = <1>; /* RX-interrupt output */
+            };
+
+};
