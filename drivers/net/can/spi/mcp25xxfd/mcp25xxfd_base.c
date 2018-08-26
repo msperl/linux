@@ -1082,15 +1082,22 @@ static int mcp25xxfd_probe(struct spi_device *spi)
 	if (ret)
 		goto out_debugfs;
 
+	/* setting up GPIO */
+	ret = mcp25xxfd_gpio_setup(spi);
+	if (ret)
+		goto out_debugfs;
+
 	/* and put controller to sleep by stopping the can clock */
 	ret = mcp25xxfd_stop_clock(spi, MCP25XXFD_CLK_USER_CAN);
 	if (ret)
-		goto out_debugfs;
+		goto out_gpio;
 
 	dev_info(&spi->dev,
 		 "MCP%x successfully initialized.\n", priv->model);
 	return 0;
 
+out_gpio:
+	mcp25xxfd_gpio_remove(spi);
 out_debugfs:
 	mcp25xxfd_debugfs_remove(spi);
 out_ctlclk:
@@ -1108,6 +1115,9 @@ out_free:
 static int mcp25xxfd_remove(struct spi_device *spi)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+
+	/* remove gpio */
+	mcp25xxfd_gpio_remove(spi);
 
 	/* clear all running clocks */
 	mcp25xxfd_stop_clock(spi, priv->clk_user_mask);
