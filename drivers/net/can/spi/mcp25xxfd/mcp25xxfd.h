@@ -109,6 +109,7 @@ enum mcp25xxfd_model {
 
 struct mcp25xxfd_priv {
 	struct spi_device *spi;
+	struct gpio_chip *gpio;
 	struct clk *clk;
 
 	/* the actual model of the mcp25xxfd */
@@ -260,3 +261,7 @@ int mcp25xxfd_clear_interrupts(struct spi_device *spi);
 
 /* enabling interrupts */
 int mcp25xxfd_enable_interrupts(struct spi_device *spi, bool enable);
+
+/* gpiolib support */
+int mcp25xxfd_gpio_setup(struct spi_device *spi);
+void mcp25xxfd_gpio_remove(struct spi_device *spi);
