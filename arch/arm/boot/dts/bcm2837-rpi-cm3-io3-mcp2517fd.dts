@@ -1,0 +1,37 @@
+#include "bcm2837-rpi-cm3-io3.dts"
+
+/ {
+ soc {
+  can0_osc: can0_osc {
+   compatible = "fixed-clock";
+   #clock-cells = <0>;
+   clock-frequency  = <4000000>;
+  };
+ };
+};
+
+&gpio {
+  can0_pins: can0_pins {
+   brcm,pins = <16>;
+   brcm,function = <0>; /* input */
+  };
+};
+
+&spi {
+ status = "okay";
+//  pinctrl-names = "default";
+//  pinctrl-0 = <&spi0_gpio7>;
+ dmas = <&dma 6>, <&dma 7>;
+ dma-names = "tx", "rx";
+
+mcp2517fdcan0: can@0 {
+  compatible = "microchip,mcp2517fd";
+  pinctrl-names = "default";
+  pinctrl-0 = <&can0_pins>;
+  reg = <0>;
+  clocks = <&can0_osc>;
+  spi-max-frequency = <12500000>;
+  interrupt-parent = <&gpio>;
+  interrupts = <16 0x8>;
+ };
+};

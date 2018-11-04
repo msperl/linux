@@ -83,7 +83,10 @@ dtb-$(CONFIG_ARCH_BCM2835) += \
 	bcm2837-rpi-3-b-plus.dtb \
 	bcm2837-rpi-cm3-io3.dtb \
 	bcm2835-rpi-zero.dtb \
-	bcm2835-rpi-zero-w.dtb
+	bcm2835-rpi-zero-w.dtb \
+	bcm2837-rpi-cm3-io3.dtb \
+	bcm2837-rpi-cm3-io3x.dtb \
+        bcm2837-rpi-cm3-io3-mcp2517fd.dtb
 dtb-$(CONFIG_ARCH_BCM_5301X) += \
 	bcm4708-asus-rt-ac56u.dtb \
 	bcm4708-asus-rt-ac68u.dtb \
