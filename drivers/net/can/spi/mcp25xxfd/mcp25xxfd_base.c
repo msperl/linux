@@ -504,6 +504,7 @@ int mcp25xxfd_clear_interrupts(struct spi_device *spi)
 {
 	mcp25xxfd_clear_ecc_interrupts(spi);
 	mcp25xxfd_clear_crc_interrupts(spi);
+	mcp25xxfd_clear_can_interrupts(spi);
 
 	return 0;
 }
@@ -538,7 +539,7 @@ static int mcp25xxfd_enable_crc_interrupts(struct spi_device *spi,
 int mcp25xxfd_enable_interrupts(struct spi_device *spi,
 				bool enable)
 {
-	/* error handling only on enable for this function */
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	int ret = 0;
 
 	/* if we enable clear interrupt flags first */
@@ -554,6 +555,21 @@ int mcp25xxfd_enable_interrupts(struct spi_device *spi,
 	ret = mcp25xxfd_enable_crc_interrupts(spi, enable);
 	if (enable && ret)
 		goto out_ecc;
+
+	ret = mcp25xxfd_enable_can_interrupts(spi, enable);
+	if (enable && ret)
+		goto out_ecc;
+
+	/* enable/disable interrupt as required */
+	if (enable) {
+		if (!priv->irq.enabled)
+			enable_irq(spi->irq);
+	} else {
+		if (priv->irq.enabled)
+			disable_irq(spi->irq);
+	}
+	/* mark enabled/disabled */
+	priv->irq.enabled = enable;
 
 	/* if we disable interrupts clear interrupt flags last */
 	if (!enable)
@@ -1108,15 +1124,22 @@ static int mcp25xxfd_probe(struct spi_device *spi)
 	if (ret)
 		goto out_debugfs;
 
+	/* add can (depends on debugfs) */
+	ret = mcp25xxfd_can_setup(spi);
+	if (ret)
+		goto out_gpio;
+
 	/* and put controller to sleep by stopping the can clock */
 	ret = mcp25xxfd_stop_clock(spi, MCP25XXFD_CLK_USER_CAN);
 	if (ret)
-		goto out_gpio;
+		goto out_can;
 
 	dev_info(&spi->dev,
 		 "MCP%x successfully initialized.\n", priv->model);
 	return 0;
 
+out_can:
+	mcp25xxfd_can_remove(spi);
 out_gpio:
 	mcp25xxfd_gpio_remove(spi);
 out_debugfs:
@@ -1136,6 +1159,9 @@ out_free:
 static int mcp25xxfd_remove(struct spi_device *spi)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+
+	/* remove can */
+	mcp25xxfd_can_remove(spi);
 
 	/* remove gpio */
 	mcp25xxfd_gpio_remove(spi);

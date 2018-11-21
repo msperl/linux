@@ -109,6 +109,7 @@ enum mcp25xxfd_model {
 
 struct mcp25xxfd_priv {
 	struct spi_device *spi;
+	struct net_device *net;
 	struct gpio_chip *gpio;
 	struct clk *clk;
 
@@ -155,6 +156,11 @@ struct mcp25xxfd_priv {
 		u32 crc;
 		u32 ecccon;
 	} regs;
+
+	/* flag to see if the irq is enabled */
+	struct {
+		int enabled;
+	} irq;
 
 	/* debugfs related */
 #if defined(CONFIG_DEBUG_FS)
@@ -257,11 +263,19 @@ int mcp25xxfd_can_hw_probe(struct spi_device *spi);
 /* clearing interrupt flags */
 int mcp25xxfd_clear_crc_interrupts(struct spi_device *spi);
 int mcp25xxfd_clear_ecc_interrupts(struct spi_device *spi);
+int mcp25xxfd_clear_can_interrupts(struct spi_device *spi);
 int mcp25xxfd_clear_interrupts(struct spi_device *spi);
 
 /* enabling interrupts */
 int mcp25xxfd_enable_interrupts(struct spi_device *spi, bool enable);
+int mcp25xxfd_enable_can_interrupts(struct spi_device *spi, bool enable);
 
 /* gpiolib support */
 int mcp25xxfd_gpio_setup(struct spi_device *spi);
 void mcp25xxfd_gpio_remove(struct spi_device *spi);
+
+/* can support */
+int mcp25xxfd_can_setup(struct spi_device *spi);
+void mcp25xxfd_can_remove(struct spi_device *spi);
+int mcp25xxfd_can_suspend(struct spi_device *spi);
+int mcp25xxfd_can_resume(struct spi_device *spi);
