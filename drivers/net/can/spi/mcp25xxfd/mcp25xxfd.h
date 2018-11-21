@@ -107,6 +107,7 @@ enum mcp25xxfd_model {
 
 struct mcp25xxfd_priv {
 	struct spi_device *spi;
+	struct net_device *net;
 	struct gpio_chip *gpio;
 	struct clk *clk;
 
@@ -154,6 +155,11 @@ struct mcp25xxfd_priv {
 		u32 ecccon;
 	} regs;
 
+	/* flag to see if the irq is enabled */
+	struct {
+		int enabled;
+	} irq;
+
 	/* debugfs related */
 #if defined(CONFIG_DEBUG_FS)
 	struct dentry *debugfs_dir;
@@ -186,6 +192,28 @@ static inline void mcp25xxfd_convert_from_cpu(u32 *data, int n)
 
 	for (i = 0; i < n; i++)
 		data[i] = cpu_to_le32(data[i]);
+}
+
+static inline void mcp25xxfd_calc_cmd_addr(u16 cmd, u16 addr, u8 *data)
+{
+	cmd = cmd | (addr & ADDRESS_MASK);
+
+	data[0] = (cmd >> 8) & 0xff;
+	data[1] = (cmd >> 0) & 0xff;
+}
+
+static inline int mcp25xxfd_first_byte(u32 mask)
+{
+	return (mask & 0x0000ffff) ?
+		((mask & 0x000000ff) ? 0 : 1) :
+		((mask & 0x00ff0000) ? 2 : 3);
+}
+
+static inline int mcp25xxfd_last_byte(u32 mask)
+{
+	return (mask & 0xffff0000) ?
+		((mask & 0xff000000) ? 3 : 2) :
+		((mask & 0x0000ff00) ? 1 : 0);
 }
 
 int mcp25xxfd_cmd_readn(struct spi_device *spi, u32 reg,
@@ -233,11 +261,19 @@ int mcp25xxfd_can_hw_probe(struct spi_device *spi);
 /* clearing interrupt flags */
 int mcp25xxfd_clear_crc_interrupts(struct spi_device *spi);
 int mcp25xxfd_clear_ecc_interrupts(struct spi_device *spi);
+int mcp25xxfd_clear_can_interrupts(struct spi_device *spi);
 int mcp25xxfd_clear_interrupts(struct spi_device *spi);
 
 /* enabling interrupts */
 int mcp25xxfd_enable_interrupts(struct spi_device *spi, bool enable);
+int mcp25xxfd_enable_can_interrupts(struct spi_device *spi, bool enable);
 
 /* gpiolib support */
 int mcp25xxfd_gpio_setup(struct spi_device *spi);
 void mcp25xxfd_gpio_remove(struct spi_device *spi);
+
+/* can support */
+int mcp25xxfd_can_setup(struct spi_device *spi);
+void mcp25xxfd_can_remove(struct spi_device *spi);
+int mcp25xxfd_can_suspend(struct spi_device *spi);
+int mcp25xxfd_can_resume(struct spi_device *spi);
