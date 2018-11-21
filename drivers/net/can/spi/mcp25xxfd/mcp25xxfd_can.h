@@ -10,6 +10,12 @@
 
 #include "mcp25xxfd.h"
 #include <linux/bitops.h>
+#include <linux/can/core.h>
+#include <linux/can/dev.h>
+#include <linux/interrupt.h>
+#include <linux/netdevice.h>
+#include <linux/regulator/consumer.h>
+#include <linux/spi/spi.h>
 
 #define CAN_SFR_BASE(x)			(0x000 + (x))
 #define CAN_CON				CAN_SFR_BASE(0x00)
@@ -201,6 +207,13 @@
 	 CAN_INT_SPICRCIF |		\
 	 CAN_INT_TXATIF |		\
 	 CAN_INT_RXOVIF |		\
+	 CAN_INT_CERRIF |		\
+	 CAN_INT_SERRIF |		\
+	 CAN_INT_WAKIF |		\
+	 CAN_INT_IVMIF)
+#  define CAN_INT_IF_CLEAR_MASK		\
+	(CAN_INT_TBCIF	|		\
+	 CAN_INT_MODIF	|		\
 	 CAN_INT_CERRIF |		\
 	 CAN_INT_SERRIF |		\
 	 CAN_INT_WAKIF |		\
@@ -485,3 +498,271 @@
 #define CAN_OBJ_FLAGS_FILHIT_MASK				      \
 	GENMASK(CAN_FLAGS_FILHIT_SHIFT + CAN_FLAGS_FILHIT_BITS - 1,   \
 		CAN_FLAGS_FILHIT_SHIFT)
+
+#define TX_ECHO_SKB_MAX	32
+
+struct mcp25xxfd_fifo {
+	u32 count;
+	u32 start;
+	u32 increment;
+	u32 size;
+	u32 priority_start;
+	u32 priority_increment;
+	u64 dlc_usage[16];
+	u64 fd_count;
+
+	struct dentry *debugfs_dir;
+};
+
+struct mcp25xxfd_obj_ts {
+	/* using signed here to handle rollover correctly */
+	s32 ts;
+	/* positive fifos are rx, negative tx, 0 is not a valid fifo */
+	s32 fifo;
+};
+
+struct mcp25xxfd_can_priv {
+	/* can_priv has to be the first one to be usable with alloc_candev
+	 * which expects struct can_priv to be right at the start of the
+	 * priv structure
+	 */
+	struct can_priv can;
+	struct mcp25xxfd_priv *priv;
+	struct regulator *transceiver;
+
+	/* the can mode currently active */
+	int mode;
+
+	/* can config registers */
+	struct {
+		u32 con;
+		u32 tdc;
+		u32 tscon;
+		u32 tefcon;
+		u32 nbtcfg;
+		u32 dbtcfg;
+	} regs;
+
+	/* can status registers (mostly) - read in one go
+	 * bdiag0 and bdiag1 are optional, but when
+	 * berr counters are requested on a regular basis
+	 * during high CAN-bus load this would trigger the fact
+	 * that spi_sync would get queued for execution in the
+	 * spi thread and the spi handler would not get
+	 * called inline in the interrupt thread without any
+	 * context switches or wakeups...
+	 */
+	struct {
+		u32 intf;
+		/* ASSERT(CAN_INT + 4 == CAN_RXIF) */
+		u32 rxif;
+		/* ASSERT(CAN_RXIF + 4 == CAN_TXIF) */
+		u32 txif;
+		/* ASSERT(CAN_TXIF + 4 == CAN_RXOVIF) */
+		u32 rxovif;
+		/* ASSERT(CAN_RXOVIF + 4 == CAN_TXATIF) */
+		u32 txatif;
+		/* ASSERT(CAN_TXATIF + 4 == CAN_TXREQ) */
+		u32 txreq;
+		/* ASSERT(CAN_TXREQ + 4 == CAN_TREC) */
+		u32 trec;
+	} status;
+
+	/* information of fifo setup */
+	struct {
+		/* define payload size and mode */
+		u32 payload_size;
+		u32 payload_mode;
+
+		/* infos on fifo layout */
+		struct {
+			u32 count;
+			u32 size;
+			u32 index;
+		} tef;
+		struct mcp25xxfd_fifo tx;
+		struct mcp25xxfd_fifo rx;
+
+		/* the address and priority of all fifos */
+		struct {
+			u32 control;
+			u32 status;
+			u32 offset;
+		} fifo_reg[32];
+		struct {
+			u32 is_tx;
+			u32 priority;
+			u64 use_count;
+		} fifo_info[32];
+
+		/* queue of can frames that need to get submitted
+		 * to the network stack during an interrupt loop in one go
+		 * (this gets sorted by timestamp before submission
+		 * and contains both rx frames as well tx frames that have
+		 * gone over the CAN bus successfully
+		 */
+		struct mcp25xxfd_obj_ts submit_queue[32];
+		int  submit_queue_count;
+
+		/* the tx queue of spi messages */
+		struct mcp2517fd_tx_spi_message_queue *tx_queue;
+
+		/* the directory entry of the can_fifo debugfs directory */
+		struct dentry *debugfs_dir;
+	} fifos;
+
+	/* statistics */
+	struct {
+		u64 irq_calls;
+		u64 irq_loops;
+
+		u64 int_serr_count;
+		u64 int_serr_rx_count;
+		u64 int_serr_tx_count;
+		u64 int_mod_count;
+		u64 int_rx_count;
+		u64 int_txat_count;
+		u64 int_tef_count;
+		u64 int_rxov_count;
+		u64 int_ecc_count;
+		u64 int_ivm_count;
+		u64 int_cerr_count;
+
+		u64 tx_fd_count;
+		u64 tx_brs_count;
+
+		u64 rx_reads;
+		u64 rx_reads_prefetched_too_few;
+		u64 rx_reads_prefetched_too_few_bytes;
+		u64 rx_reads_prefetched_too_many;
+		u64 rx_reads_prefetched_too_many_bytes;
+	} stats;
+
+	/* bus state */
+	struct {
+		u32 state;
+		u32 new_state;
+
+		u32 bdiag[2];
+	} bus;
+
+	/* can merror messages */
+	struct {
+		u32 id;
+		u8  data[8];
+	} error_frame;
+
+	/* a sram equivalent */
+	u8 sram[MCP25XXFD_SRAM_SIZE];
+};
+
+struct mcp25xxfd_obj_tef {
+	u32 id;
+	u32 flags;
+	u32 ts;
+};
+
+struct mcp25xxfd_obj_tx {
+	u32 id;
+	u32 flags;
+	u8 data[];
+};
+
+struct mcp25xxfd_obj_rx {
+	u32 id;
+	u32 flags;
+	u32 ts;
+	u8 data[];
+};
+
+int mcp25xxfd_can_get_mode(struct spi_device *spi, u32 *mode_data);
+int mcp25xxfd_can_switch_mode(struct spi_device *spi, u32 *mode_data,
+			      int mode);
+irqreturn_t mcp25xxfd_can_int(int irq, void *dev_id);
+netdev_tx_t mcp25xxfd_can_start_xmit(struct sk_buff *skb,
+				     struct net_device *net);
+int mcp25xxfd_can_setup_fifos(struct net_device *net);
+void mcp25xxfd_can_release_fifos(struct net_device *net);
+
+/* ideally these would be defined in uapi/linux/can.h */
+#define CAN_EFF_SID_SHIFT		(CAN_EFF_ID_BITS - CAN_SFF_ID_BITS)
+#define CAN_EFF_SID_BITS		CAN_SFF_ID_BITS
+#define CAN_EFF_SID_MASK				      \
+	GENMASK(CAN_EFF_SID_SHIFT + CAN_EFF_SID_BITS - 1,     \
+		CAN_EFF_SID_SHIFT)
+#define CAN_EFF_EID_SHIFT		0
+#define CAN_EFF_EID_BITS		CAN_EFF_SID_SHIFT
+#define CAN_EFF_EID_MASK				      \
+	GENMASK(CAN_EFF_EID_SHIFT + CAN_EFF_EID_BITS - 1,     \
+		CAN_EFF_EID_SHIFT)
+
+static inline
+void mcp25xxfd_mcpid_to_canid(u32 mcp_id, u32 mcp_flags, u32 *can_id)
+{
+	u32 sid = (mcp_id & CAN_OBJ_ID_SID_MASK) >> CAN_OBJ_ID_SID_SHIFT;
+	u32 eid = (mcp_id & CAN_OBJ_ID_EID_MASK) >> CAN_OBJ_ID_EID_SHIFT;
+
+	/* select normal or extended ids */
+	if (mcp_flags & CAN_OBJ_FLAGS_IDE) {
+		*can_id = (eid << CAN_EFF_EID_SHIFT) |
+			(sid << CAN_EFF_SID_SHIFT) |
+			CAN_EFF_FLAG;
+	} else {
+		*can_id = sid;
+	}
+	/* handle rtr */
+	*can_id |= (mcp_flags & CAN_OBJ_FLAGS_RTR) ? CAN_RTR_FLAG : 0;
+}
+
+static inline
+void mcp25xxfd_canid_to_mcpid(u32 can_id, u32 *id, u32 *flags)
+{
+	/* depending on can_id flag compute extended or standard ids */
+	if (can_id & CAN_EFF_FLAG) {
+		int sid = (can_id & CAN_EFF_SID_MASK) >> CAN_EFF_SID_SHIFT;
+		int eid = (can_id & CAN_EFF_EID_MASK) >> CAN_EFF_EID_SHIFT;
+		*id = (eid << CAN_OBJ_ID_EID_SHIFT) |
+			(sid << CAN_OBJ_ID_SID_SHIFT);
+		*flags = CAN_OBJ_FLAGS_IDE;
+	} else {
+		*id = can_id & CAN_SFF_MASK;
+		*flags = 0;
+	}
+
+	/* Handle RTR */
+	*flags |= (can_id & CAN_RTR_FLAG) ? CAN_OBJ_FLAGS_RTR : 0;
+}
+
+static inline
+void mcp25xxfd_can_queue_frame(struct mcp25xxfd_can_priv *cpriv,
+			       s32 fifo, s32 ts)
+{
+	int idx = cpriv->fifos.submit_queue_count;
+
+	cpriv->fifos.submit_queue[idx].fifo = fifo;
+	cpriv->fifos.submit_queue[idx].ts = ts;
+
+	cpriv->fifos.submit_queue_count++;
+}
+
+int mcp25xxfd_can_read_rx_frames(struct spi_device *spi);
+int mcp25xxfd_can_submit_rx_frame(struct spi_device *spi, int fifo);
+int mcp25xxfd_can_submit_tx_frame(struct spi_device *spi, int fifo);
+
+int mcp25xxfd_can_int_handle_txatif(struct spi_device *spi);
+int mcp25xxfd_can_int_handle_tefif(struct spi_device *spi);
+
+int mcp25xxfd_can_tx_queue_alloc(struct net_device *net);
+void mcp25xxfd_can_tx_queue_free(struct net_device *net);
+void mcp25xxfd_can_tx_queue_restart(struct net_device *net);
+void mcp25xxfd_can_tx_queue_manage(struct net_device *net, int state);
+void mcp25xxfd_can_tx_queue_manage_nolock(struct net_device *net, int state);
+# define TX_QUEUE_STATE_STOPPED  0
+# define TX_QUEUE_STATE_STARTED  1
+# define TX_QUEUE_STATE_RUNABLE 2
+# define TX_QUEUE_STATE_RESTART  3
+
+int mcp25xxfd_can_switch_mode_nowait(struct spi_device *spi,
+				     u32 *mode_data, int mode);
+
+void mcp25xxfd_can_rx_fifo_debugfs(struct net_device *net);
