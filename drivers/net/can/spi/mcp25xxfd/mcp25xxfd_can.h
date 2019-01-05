@@ -632,10 +632,14 @@ struct mcp25xxfd_can_priv {
 		u64 tx_brs_count;
 
 		u64 rx_reads;
+		u64 rx_single_reads;
 		u64 rx_reads_prefetched_too_few;
 		u64 rx_reads_prefetched_too_few_bytes;
 		u64 rx_reads_prefetched_too_many;
 		u64 rx_reads_prefetched_too_many_bytes;
+		u64 rx_bulk_reads;
+#define RX_BULK_READ_STATS_BINS 8
+		u64 rx_bulk_read_sizes[RX_BULK_READ_STATS_BINS];
 	} stats;
 
 	/* bus state */
