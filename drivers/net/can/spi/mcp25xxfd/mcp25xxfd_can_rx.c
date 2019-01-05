@@ -35,10 +35,16 @@ void mcp25xxfd_can_rx_fifo_debugfs(struct net_device *net)
 {
 	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
 	struct dentry *dir = cpriv->fifos.rx.debugfs_dir;
+	char name[32];
+	int i;
 
 	/* add statistics on tef */
 	debugfs_create_u64("rx_reads", 0444, dir,
 			   &cpriv->stats.rx_reads);
+	debugfs_create_u64("rx_single_reads", 0444, dir,
+			   &cpriv->stats.rx_single_reads);
+	debugfs_create_u64("rx_bulk_reads", 0444, dir,
+			   &cpriv->stats.rx_bulk_reads);
 	debugfs_create_u64("rx_reads_prefetched_too_few", 0444, dir,
 			   &cpriv->stats.rx_reads_prefetched_too_few);
 	debugfs_create_u64("rx_reads_prefetched_too_few_bytes", 0444, dir,
@@ -47,6 +53,19 @@ void mcp25xxfd_can_rx_fifo_debugfs(struct net_device *net)
 			   &cpriv->stats.rx_reads_prefetched_too_many);
 	debugfs_create_u64("rx_reads_prefetched_too_many_bytes", 0444, dir,
 			   &cpriv->stats.rx_reads_prefetched_too_many_bytes);
+
+	/* present the fifos */
+	for (i = 0; i < RX_BULK_READ_STATS_BINS - 2; i++) {
+		snprintf(name, sizeof(name),
+			 "rx_bulk_reads_%i", i + 1);
+		debugfs_create_u64(name, 0444, dir,
+				   &cpriv->stats.rx_bulk_read_sizes[i]);
+	}
+
+	/* i is already set correctly in the loop above */
+	snprintf(name, sizeof(name), "rx_bulk_reads_%i+", i + 1);
+	debugfs_create_u64(name, 0444, dir,
+			   &cpriv->stats.rx_bulk_read_sizes[i]);
 }
 #else
 void mcp25xxfd_can_rx_fifo_debugfs(struct net_device *net)
@@ -159,7 +178,8 @@ int mcp25xxfd_can_submit_rx_frame(struct spi_device *spi, int fifo)
 }
 
 static int mcp25xxfd_can_read_rx_frame(struct spi_device *spi,
-				       int fifo, int prefetch_bytes)
+				       int fifo, int prefetch_bytes,
+				       bool read_data)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
@@ -171,10 +191,13 @@ static int mcp25xxfd_can_read_rx_frame(struct spi_device *spi,
 	int len, ret;
 
 	/* we read the header plus prefetch_bytes */
-	ret = mcp25xxfd_cmd_readn(spi, MCP25XXFD_SRAM_ADDR(addr),
-				  rx, sizeof(*rx) + prefetch_bytes);
-	if (ret)
-		return ret;
+	if (read_data) {
+		cpriv->stats.rx_single_reads++;
+		ret = mcp25xxfd_cmd_readn(spi, MCP25XXFD_SRAM_ADDR(addr),
+					  rx, sizeof(*rx) + prefetch_bytes);
+		if (ret)
+			return ret;
+	}
 
 	/* transpose the headers to CPU format*/
 	rx->id = le32_to_cpu(rx->id);
@@ -187,7 +210,7 @@ static int mcp25xxfd_can_read_rx_frame(struct spi_device *spi,
 	len = can_dlc2len(min_t(int, dlc, (net->mtu == CANFD_MTU) ? 15 : 8));
 
 	/* read the remaining data for canfd frames */
-	if (len > prefetch_bytes) {
+	if (read_data && len > prefetch_bytes) {
 		/* update stats */
 		cpriv->stats.rx_reads_prefetched_too_few++;
 		cpriv->stats.rx_reads_prefetched_too_few_bytes +=
@@ -224,6 +247,43 @@ static int mcp25xxfd_can_read_rx_frame(struct spi_device *spi,
 	return mcp25xxfd_cmd_write_mask(spi, CAN_FIFOCON(fifo),
 					CAN_FIFOCON_FRESET,
 					CAN_FIFOCON_FRESET);
+}
+
+static int mcp25xxfd_can_read_rx_frame_bulk(struct spi_device *spi,
+					    int fifo_start,
+					    int fifo_end)
+{
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
+	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
+	int count = abs(fifo_end - fifo_start) + 1;
+	int fifo_lowest = min_t(int, fifo_start, fifo_end);
+	int addr = cpriv->fifos.fifo_reg[fifo_lowest].offset;
+	struct mcp25xxfd_obj_rx *rx =
+		(struct mcp25xxfd_obj_rx *)(cpriv->sram + addr);
+	int len = (sizeof(*rx) + ((net->mtu == CANFD_MTU) ? 64 : 8)) * count;
+	int fifo, i, ret;
+
+	/* update stats */
+	cpriv->stats.rx_bulk_reads++;
+	i = min_t(int, RX_BULK_READ_STATS_BINS - 1, count - 1);
+	cpriv->stats.rx_bulk_read_sizes[i]++;
+
+	/* we read the header plus read_min data bytes */
+	ret = mcp25xxfd_cmd_readn(spi, MCP25XXFD_SRAM_ADDR(addr),
+				  rx, len);
+	if (ret)
+		return ret;
+
+	/* now process all of them - no need to read... */
+	for (fifo = fifo_start; count > 0;
+	     fifo += cpriv->fifos.rx.increment, count--) {
+		ret = mcp25xxfd_can_read_rx_frame(spi, fifo, 8, false);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 /* at least in can2.0 mode we can read multiple RX-fifos in one go
@@ -344,7 +404,7 @@ static int mcp25xxfd_can_read_rx_frame(struct spi_device *spi,
  * reading multiple rx fifos is a realistic option of optimization
  */
 
-int mcp25xxfd_can_read_rx_frames(struct spi_device *spi)
+static int mcp25xxfd_can_read_rx_frames_fd(struct spi_device *spi)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
@@ -354,23 +414,76 @@ int mcp25xxfd_can_read_rx_frames(struct spi_device *spi)
 
 	/* calculate optimal prefetch to use */
 	if (rx_prefetch_bytes != -1)
-		prefetch = min_t(int, rx_prefetch_bytes,
-				 (net->mtu == CANFD_MTU) ? 64 : 8);
+		prefetch = min_t(int, rx_prefetch_bytes, 64);
 	else
 		prefetch = 8;
 
-	/* we can optimize here */
+	/* loop all frames */
 	for (i = 0, fifo = cpriv->fifos.rx.start;
 	     i < cpriv->fifos.rx.count;
 	     i++, fifo += cpriv->fifos.rx.increment) {
 		if (cpriv->status.rxif & BIT(fifo)) {
 			/* read the frame */
 			ret = mcp25xxfd_can_read_rx_frame(spi, fifo,
-							  prefetch);
+							  prefetch, true);
 			if (ret)
 				return ret;
 		}
 	}
 
 	return 0;
+}
+
+/* right now we only optimize for sd (can2.0) frame case,
+ * but in principle it could be also be valuable for CANFD
+ * frames when we receive lots of 64 byte packets with BRS set
+ * and a big difference between nominal and data bitrates
+ */
+static
+int mcp25xxfd_can_read_rx_frames_sd(struct spi_device *spi)
+{
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
+	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
+	int i, fifo_start, fifo_end;
+	int ret;
+
+	/* iterate over fifos trying to find fifos next to each other */
+	for (i = 0,
+	     fifo_start = cpriv->fifos.rx.start,
+	     fifo_end = fifo_start;
+	     i < cpriv->fifos.rx.count;
+	     i++,
+	     fifo_end += cpriv->fifos.rx.increment,
+	     fifo_start = fifo_end
+	    ) {
+		/* if bit is not set then continue */
+		if (!(cpriv->status.rxif & BIT(fifo_start)))
+			continue;
+		/* find the last fifo with a bit set in sequence */
+		for (fifo_end = fifo_start;
+		     cpriv->status.rxif &
+			     BIT(fifo_end + cpriv->fifos.rx.increment);
+		     fifo_end += + cpriv->fifos.rx.increment)
+			;
+		/* and now read those fifos in bulk */
+		ret = mcp25xxfd_can_read_rx_frame_bulk(spi,
+						       fifo_start,
+						       fifo_end);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int mcp25xxfd_can_read_rx_frames(struct spi_device *spi)
+{
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
+
+	if (net->mtu == CANFD_MTU)
+		return mcp25xxfd_can_read_rx_frames_fd(spi);
+	else
+		return mcp25xxfd_can_read_rx_frames_sd(spi);
 }
