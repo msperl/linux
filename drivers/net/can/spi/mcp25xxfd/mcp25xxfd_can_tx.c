@@ -60,6 +60,16 @@ struct mcp2517fd_tx_spi_message_queue {
 	/* the queue state as seen per controller */
 	int state;
 
+	/* statistics */
+	struct {
+		u64 tef_reads;
+		u64 tef_conservative_reads;
+		u64 tef_opportunistic_reads;
+		u64 tef_read_splits;
+#define TEF_READ_STATS_BINS 8
+		u64 tef_opportunistic_read_sizes[TEF_READ_STATS_BINS];
+	} stats;
+
 	/* spinlock protecting spi submission order */
 	spinlock_t spi_lock;
 
@@ -162,6 +172,9 @@ static void mcp25xxfd_can_tx_queue_debugfs(struct net_device *net)
 	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
 	struct dentry *dir = cpriv->fifos.tx.debugfs_dir;
 	struct mcp2517fd_tx_spi_message_queue *queue = cpriv->fifos.tx_queue;
+	char name[32];
+	u64 *data;
+	int i;
 
 	debugfs_create_u32("netif_queue_state",  0444, dir,
 			   &cpriv->fifos.tx_queue->state);
@@ -177,6 +190,27 @@ static void mcp25xxfd_can_tx_queue_debugfs(struct net_device *net)
 			   &queue->in_can_transfer);
 	debugfs_create_x32("fifos_transferred", 0444, dir,
 			   &queue->transferred);
+
+	/* add statistics on tef */
+	debugfs_create_u64("tef_reads", 0444, dir,
+			   &queue->stats.tef_reads);
+	debugfs_create_u64("tef_conservative_reads", 0444, dir,
+			   &queue->stats.tef_conservative_reads);
+	debugfs_create_u64("tef_opportunistic_reads", 0444, dir,
+			   &queue->stats.tef_opportunistic_reads);
+	debugfs_create_u64("tef_read_splits", 0444, dir,
+			   &queue->stats.tef_read_splits);
+	for (i = 0; i < TEF_READ_STATS_BINS - 2; i++) {
+		snprintf(name, sizeof(name),
+			 "tef_opportunistic_reads_%i", i + 1);
+		data = &queue->stats.tef_opportunistic_read_sizes[i];
+		debugfs_create_u64(name, 0444, dir, data);
+	}
+
+	/* i is already set correctly in the loop above */
+	snprintf(name, sizeof(name), "tef_opportunistic_reads_%i+", i + 1);
+	debugfs_create_u64(name, 0444, dir,
+			   &queue->stats.tef_opportunistic_read_sizes[i]);
 }
 #else
 static void mcp25xxfd_can_tx_queue_debugfs(struct net_device *net)
@@ -498,22 +532,65 @@ int mcp25xxfd_can_submit_tx_frame(struct spi_device *spi, int fifo)
 	return 0;
 }
 
-static int mcp25xxfd_can_int_handle_tefif_fifo(struct spi_device *spi)
+static
+int mcp25xxfd_can_tef_read(struct spi_device *spi, int start, int count)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
 	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
-	struct mcp25xxfd_obj_tef *tef;
+	u32 tef_offset = start * cpriv->fifos.tef.size;
+	struct mcp25xxfd_obj_tef *tef =
+		(struct mcp25xxfd_obj_tef *)(cpriv->sram + tef_offset);
+	int last, read, ret;
+
+	/* compute how many we can read in one go */
+	last = start + count;
+	read = (last > cpriv->fifos.tef.count) ?
+		(cpriv->fifos.tef.count - start) :
+		count;
+
+	/* and read it */
+	ret = mcp25xxfd_cmd_read_regs(spi, MCP25XXFD_SRAM_ADDR(tef_offset),
+				      &tef->id, sizeof(*tef) * read);
+	if (ret)
+		return ret;
+
+	/* and read a second part on wrap */
+	if (read != count) {
+		/* update stats */
+		cpriv->fifos.tx_queue->stats.tef_read_splits++;
+		/* compute the  addresses  */
+		read = count - read;
+		tef = (struct mcp25xxfd_obj_tef *)(cpriv->sram);
+		/* and read again */
+		ret = mcp25xxfd_cmd_read_regs(spi,
+					      MCP25XXFD_SRAM_ADDR(0),
+					      &tef->id,
+					      sizeof(*tef) * read);
+	}
+
+	return ret;
+}
+
+static int mcp25xxfd_can_int_handle_tefif_fifo(struct spi_device *spi,
+					       bool read_data)
+{
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
+	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
 	u32 tef_offset = cpriv->fifos.tef.index * cpriv->fifos.tef.size;
+	struct mcp25xxfd_obj_tef *tef =
+		(struct mcp25xxfd_obj_tef *)(cpriv->sram + tef_offset);
 	int fifo, ret;
 	unsigned long flags;
 
 	/* read the next TEF entry to get the transmit timestamp and fifo */
 	tef = (struct mcp25xxfd_obj_tef *)(cpriv->sram + tef_offset);
-	ret = mcp25xxfd_cmd_read_regs(spi, MCP25XXFD_SRAM_ADDR(tef_offset),
-				      &tef->id, sizeof(*tef));
-	if (ret)
-		return ret;
+	if (read_data) {
+		ret = mcp25xxfd_can_tef_read(spi, cpriv->fifos.tef.index, 1);
+		if (ret)
+			return ret;
+	}
 
 	/* get the fifo from tef */
 	fifo = (tef->flags & CAN_OBJ_FLAGS_SEQ_MASK) >>
@@ -526,6 +603,9 @@ static int mcp25xxfd_can_int_handle_tefif_fifo(struct spi_device *spi)
 			   "tefif: fifo %i not pending - tef data: id: %08x flags: %08x, ts: %08x - this may be a problem with spi signal quality- try reducing spi-clock speed if this can get reproduced",
 			   fifo, tef->id, tef->flags, tef->ts);
 	spin_unlock_irqrestore(&cpriv->fifos.tx_queue->lock, flags);
+
+	/* update stats */
+	cpriv->fifos.tx_queue->stats.tef_reads++;
 
 	/* now we can schedule the fifo for echo submission */
 	mcp25xxfd_can_queue_frame(cpriv, -fifo, tef->ts);
@@ -551,6 +631,9 @@ static int mcp25xxfd_can_int_handle_tefif_fifo(struct spi_device *spi)
 static
 int mcp25xxfd_can_int_handle_tefif_conservative(struct spi_device *spi)
 {
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
+	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
 	u32 tefsta;
 	int ret;
 
@@ -563,9 +646,12 @@ int mcp25xxfd_can_int_handle_tefif_conservative(struct spi_device *spi)
 	/* read the tef in an inefficient loop */
 	while (tefsta & CAN_TEFSTA_TEFNEIF) {
 		/* read one tef */
-		ret = mcp25xxfd_can_int_handle_tefif_fifo(spi);
+		ret = mcp25xxfd_can_int_handle_tefif_fifo(spi, true);
 		if (ret)
 			return ret;
+
+		/* update stats */
+		cpriv->fifos.tx_queue->stats.tef_conservative_reads++;
 
 		/* read the TEF status */
 		ret = mcp25xxfd_cmd_read_mask(spi, CAN_TEFSTA,
@@ -584,14 +670,35 @@ int mcp25xxfd_can_int_handle_tefif_oportunistic(struct spi_device *spi,
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
 	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
-	int i, fifo, ret;
+	int i, fifo, count, ret;
 
-	/* now iterate those */
+	/* count the number of fifos that have terminated */
+	for (i = 0, fifo = cpriv->fifos.tx.start, count = 0;
+	     i < cpriv->fifos.tx.count;
+	     i++, fifo += cpriv->fifos.tx.increment)
+		if (finished & BIT(fifo))
+			count++;
+
+	/* read them in one go if possible
+	 * we also assume that we have count(TEF) >= count(TX-FIFOS)
+	 * this may require 2 reads when we wrap arround
+	 * (that is unless count(TEF) == count(TX-FIFOS))
+	 */
+	ret = mcp25xxfd_can_tef_read(spi, cpriv->fifos.tef.index, count);
+	if (ret)
+		return ret;
+
+	/* update stats */
+	cpriv->fifos.tx_queue->stats.tef_opportunistic_reads++;
+	i = min_t(int, TEF_READ_STATS_BINS - 1, count - 1);
+	cpriv->fifos.tx_queue->stats.tef_opportunistic_read_sizes[i]++;
+
+	/* now iterate over all of them without reading again */
 	for (i = 0, fifo = cpriv->fifos.tx.start;
 	     i < cpriv->fifos.tx.count;
 	     i++, fifo += cpriv->fifos.tx.increment) {
 		if (finished & BIT(fifo)) {
-			ret = mcp25xxfd_can_int_handle_tefif_fifo(spi);
+			ret = mcp25xxfd_can_int_handle_tefif_fifo(spi, false);
 			if (ret)
 				return ret;
 		}
