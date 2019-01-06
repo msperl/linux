@@ -642,6 +642,7 @@ struct mcp25xxfd_can_priv {
 		u64 rx_bulk_read_sizes[RX_BULK_READ_STATS_BINS];
 #define RX_HISTORY_SIZE 32
 		u8 rx_history_dlc[RX_HISTORY_SIZE];
+		u8 rx_history_brs[RX_HISTORY_SIZE];
 		u8 rx_history_index;
 		u32 rx_reads_prefetch_predicted;
 	} stats;

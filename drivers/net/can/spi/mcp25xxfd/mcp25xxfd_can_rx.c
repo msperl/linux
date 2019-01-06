@@ -184,8 +184,10 @@ int mcp25xxfd_can_submit_rx_frame(struct spi_device *spi, int fifo)
 	if (rx->flags & CAN_OBJ_FLAGS_FDF)
 		cpriv->fifos.rx.fd_count++;
 
-	/* add to rx_dlc_history */
+	/* add to rx_history */
 	cpriv->stats.rx_history_dlc[cpriv->stats.rx_history_index] = dlc;
+	cpriv->stats.rx_history_brs[cpriv->stats.rx_history_index] =
+		(rx->flags & CAN_OBJ_FLAGS_BRS) ? CANFD_BRS : 0;
 	cpriv->stats.rx_history_index++;
 	if (cpriv->stats.rx_history_index >= RX_HISTORY_SIZE)
 		cpriv->stats.rx_history_index = 0;
@@ -446,16 +448,13 @@ static int mcp25xxfd_can_read_rx_frame_bulk(struct spi_device *spi,
  * reading multiple rx fifos is a realistic option of optimization
  */
 
-static int mcp25xxfd_can_read_rx_frames_fd(struct spi_device *spi)
+static int mcp25xxfd_can_read_rx_frames_single(struct spi_device *spi,
+					       int prefetch)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
 	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
-	int i, fifo, prefetch;
-	int ret;
-
-	/* calculate optimal prefetch to use */
-	prefetch = mcp25xxfd_can_rx_predict_prefetch(net);
+	int i, fifo, ret;
 
 	/* loop all frames */
 	for (i = 0, fifo = cpriv->fifos.rx.start;
@@ -473,13 +472,8 @@ static int mcp25xxfd_can_read_rx_frames_fd(struct spi_device *spi)
 	return 0;
 }
 
-/* right now we only optimize for sd (can2.0) frame case,
- * but in principle it could be also be valuable for CANFD
- * frames when we receive lots of 64 byte packets with BRS set
- * and a big difference between nominal and data bitrates
- */
 static
-int mcp25xxfd_can_read_rx_frames_sd(struct spi_device *spi)
+int mcp25xxfd_can_read_rx_frames_bulk(struct spi_device *spi)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct net_device *net = priv->net;
@@ -516,6 +510,35 @@ int mcp25xxfd_can_read_rx_frames_sd(struct spi_device *spi)
 	return 0;
 }
 
+static int mcp25xxfd_can_read_rx_frames_fd(struct spi_device *spi)
+{
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
+	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
+	int i, count_dlc15, count_brs, prefetch;
+
+	/* get a prediction on prefetch */
+	prefetch = mcp25xxfd_can_rx_predict_prefetch(net);
+
+	/* if the prefetch is < 64 then just read single */
+	if (prefetch < 64)
+		return mcp25xxfd_can_read_rx_frames_single(spi, prefetch);
+
+	/* check if we have mostly brs frames of those DLC=15 frames */
+	for (i = 0, count_brs = 0, count_dlc15 = 0; i < RX_HISTORY_SIZE; i++)
+		if (cpriv->stats.rx_history_dlc[i] == 15) {
+			count_dlc15++;
+			if (cpriv->stats.rx_history_brs[i])
+				count_brs++;
+		}
+
+	/* if we have at least 33% brs frames then run bulk */
+	if (count_brs > (count_dlc15 / 3))
+		return mcp25xxfd_can_read_rx_frames_bulk(spi);
+	else
+		return mcp25xxfd_can_read_rx_frames_single(spi, prefetch);
+}
+
 int mcp25xxfd_can_read_rx_frames(struct spi_device *spi)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
@@ -524,5 +547,5 @@ int mcp25xxfd_can_read_rx_frames(struct spi_device *spi)
 	if (net->mtu == CANFD_MTU)
 		return mcp25xxfd_can_read_rx_frames_fd(spi);
 	else
-		return mcp25xxfd_can_read_rx_frames_sd(spi);
+		return mcp25xxfd_can_read_rx_frames_bulk(spi);
 }
