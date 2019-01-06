@@ -53,6 +53,8 @@ void mcp25xxfd_can_rx_fifo_debugfs(struct net_device *net)
 			   &cpriv->stats.rx_reads_prefetched_too_many);
 	debugfs_create_u64("rx_reads_prefetched_too_many_bytes", 0444, dir,
 			   &cpriv->stats.rx_reads_prefetched_too_many_bytes);
+	debugfs_create_u32("rx_reads_prefetch_predicted", 0444, dir,
+			   &cpriv->stats.rx_reads_prefetch_predicted);
 
 	/* present the fifos */
 	for (i = 0; i < RX_BULK_READ_STATS_BINS - 2; i++) {
@@ -72,6 +74,40 @@ void mcp25xxfd_can_rx_fifo_debugfs(struct net_device *net)
 {
 }
 #endif
+
+static int mcp25xxfd_can_rx_predict_prefetch(struct net_device *net)
+{
+	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
+	int dlc, i, highest;
+	u8 histo[16];
+
+	/* if we have a prfecth set then use that one */
+	if (rx_prefetch_bytes != -1)
+		return min_t(int, rx_prefetch_bytes,
+			     (net->mtu == CANFD_MTU) ? 64 : 8);
+
+	/* memset */
+	memset(histo, 0, sizeof(histo));
+
+	/* for all others compute the histogram */
+	for (i = 0; i < RX_HISTORY_SIZE; i++)
+		histo[cpriv->stats.rx_history_dlc[i]]++;
+
+	/* and now find the highest fit */
+	for (i = (net->mtu == CANFD_MTU) ? 15 : 8, dlc = 8, highest = 0;
+	      i >= 0; i--) {
+		if (highest < histo[i]) {
+			highest = histo[i];
+			dlc = i;
+		}
+	}
+
+	/* compute length from dlc */
+	cpriv->stats.rx_reads_prefetch_predicted = can_dlc2len(dlc);
+
+	/* return the predicted length */
+	return cpriv->stats.rx_reads_prefetch_predicted;
+}
 
 static
 struct sk_buff *mcp25xxfd_can_submit_rx_normal_frame(struct net_device *net,
@@ -147,6 +183,12 @@ int mcp25xxfd_can_submit_rx_frame(struct spi_device *spi, int fifo)
 	cpriv->fifos.rx.dlc_usage[dlc]++;
 	if (rx->flags & CAN_OBJ_FLAGS_FDF)
 		cpriv->fifos.rx.fd_count++;
+
+	/* add to rx_dlc_history */
+	cpriv->stats.rx_history_dlc[cpriv->stats.rx_history_index] = dlc;
+	cpriv->stats.rx_history_index++;
+	if (cpriv->stats.rx_history_index >= RX_HISTORY_SIZE)
+		cpriv->stats.rx_history_index = 0;
 
 	/* allocate the skb buffer */
 	if (rx->flags & CAN_OBJ_FLAGS_FDF) {
@@ -413,10 +455,7 @@ static int mcp25xxfd_can_read_rx_frames_fd(struct spi_device *spi)
 	int ret;
 
 	/* calculate optimal prefetch to use */
-	if (rx_prefetch_bytes != -1)
-		prefetch = min_t(int, rx_prefetch_bytes, 64);
-	else
-		prefetch = 8;
+	prefetch = mcp25xxfd_can_rx_predict_prefetch(net);
 
 	/* loop all frames */
 	for (i = 0, fifo = cpriv->fifos.rx.start;
