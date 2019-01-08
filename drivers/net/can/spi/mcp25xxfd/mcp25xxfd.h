@@ -13,8 +13,10 @@
 #include <linux/debugfs.h>
 #include <linux/device.h>
 #include <linux/jiffies.h>
+#include <linux/mutex.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
+#include <linux/spinlock.h>
 
 /* some constants derived from the datasheets */
 #define MCP25XXFD_OST_DELAY_MS		3
@@ -143,7 +145,7 @@ struct mcp25xxfd_priv {
 	/* spi-tx/rx buffers for efficient transfers
 	 * used during setup and irq
 	 */
-	struct mutex spi_rxtx_lock;
+	spinlock_t spi_rxtx_lock; /* protects use of spi_tx/rx */
 	u8 spi_tx[MCP25XXFD_BUFFER_TXRX_SIZE];
 	u8 spi_rx[MCP25XXFD_BUFFER_TXRX_SIZE];
 

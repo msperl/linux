@@ -145,45 +145,60 @@ static int mcp25xxfd_write_then_read(struct spi_device *spi,
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct spi_transfer xfer[2];
-	u8 single_reg_data_tx[6];
-	u8 single_reg_data_rx[6];
+	u8 *spi_tx, *spi_rx;
+	int xfers;
 	int ret;
 
+	/* use allocated buffer when too big or already in use */
+	if ((tx_len + rx_len > MCP25XXFD_BUFFER_TXRX_SIZE) ||
+	    !spin_trylock(&priv->spi_rxtx_lock)) {
+		spi_tx = kzalloc(2 * (tx_len + rx_len), GFP_KERNEL);
+		spi_rx = spi_tx + tx_len + rx_len;
+	} else {
+		spi_tx = priv->spi_tx;
+		spi_rx = priv->spi_rx;
+	}
+
+	/* clear the xfers */
 	memset(xfer, 0, sizeof(xfer));
 
-	/* when using a halfduplex controller or to big for buffer */
+	/* when using a halfduplex controller still copy the buffers to
+	 * avoid stack objects
+	 */
 	if ((spi->master->flags & SPI_MASTER_HALF_DUPLEX) ||
 	    (tx_len + rx_len > sizeof(priv->spi_tx))) {
-		xfer[0].tx_buf = tx_buf;
+		xfers = 2;
+		xfer[0].tx_buf = priv->spi_tx;
 		xfer[0].len = tx_len;
 
-		xfer[1].rx_buf = rx_buf;
+		xfer[1].rx_buf = priv->spi_rx + tx_len;
 		xfer[1].len = rx_len;
-
-		return mcp25xxfd_sync_transfer(spi, xfer, 2);
-	}
-
-	/* full duplex optimization */
-	xfer[0].len = tx_len + rx_len;
-	if (xfer[0].len > sizeof(single_reg_data_tx)) {
-		mutex_lock(&priv->spi_rxtx_lock);
+	} else {
+		xfers = 1;
+		xfer[0].len = tx_len + rx_len;
 		xfer[0].tx_buf = priv->spi_tx;
 		xfer[0].rx_buf = priv->spi_rx;
-	} else {
-		xfer[0].tx_buf = single_reg_data_tx;
-		xfer[0].rx_buf = single_reg_data_rx;
+
+		/* clean the data after the write block */
+		memset((u8 *)xfer[0].tx_buf + tx_len, 0, rx_len);
 	}
 
-	/* copy and clean */
+	/* copy especially to avoid buffers from stack */
 	memcpy((u8 *)xfer[0].tx_buf, tx_buf, tx_len);
-	memset((u8 *)xfer[0].tx_buf + tx_len, 0, rx_len);
 
-	ret = mcp25xxfd_sync_transfer(spi, xfer, 1);
-	if (!ret)
-		memcpy(rx_buf, xfer[0].rx_buf + tx_len, rx_len);
+	/* do the transfer */
+	ret = mcp25xxfd_sync_transfer(spi, xfer, xfers);
+	if (ret)
+		goto out;
 
-	if (xfer[0].len > sizeof(single_reg_data_tx))
-		mutex_unlock(&priv->spi_rxtx_lock);
+	/* copy result back */
+	memcpy(rx_buf, xfer[0].rx_buf + tx_len, rx_len);
+
+out:
+	if (spi_tx == priv->spi_tx)
+		spin_unlock(&priv->spi_rxtx_lock);
+	else
+		kfree(spi_tx);
 
 	return ret;
 }
@@ -196,29 +211,33 @@ static int mcp25xxfd_write_then_write(struct spi_device *spi,
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
 	struct spi_transfer xfer;
-	u8 single_reg_data[6];
 	int ret;
 
-	if (tx_len + tx2_len > MCP25XXFD_BUFFER_TXRX_SIZE)
-		return -EINVAL;
-
+	/* clear the xfers */
 	memset(&xfer, 0, sizeof(xfer));
-
 	xfer.len = tx_len + tx2_len;
-	if (xfer.len > sizeof(single_reg_data)) {
-		mutex_lock(&priv->spi_rxtx_lock);
-		xfer.tx_buf = priv->spi_tx;
+	xfer.tx_buf = priv->spi_tx;
+
+	/* use allocated buffer when too big or already in use */
+	if ((tx_len + tx2_len > MCP25XXFD_BUFFER_TXRX_SIZE) ||
+	    !spin_trylock(&priv->spi_rxtx_lock)) {
+		xfer.tx_buf = kzalloc(tx_len + tx2_len, GFP_KERNEL);
 	} else {
-		xfer.tx_buf = single_reg_data;
+		xfer.tx_buf = priv->spi_tx;
 	}
 
+	/* copy data to location */
 	memcpy((u8 *)xfer.tx_buf, tx_buf, tx_len);
 	memcpy((u8 *)xfer.tx_buf + tx_len, tx2_buf, tx2_len);
 
+	/* run the transfer */
 	ret = mcp25xxfd_sync_transfer(spi, &xfer, 1);
 
-	if (xfer.len > sizeof(single_reg_data))
-		mutex_unlock(&priv->spi_rxtx_lock);
+	/* release lock */
+	if (xfer.tx_buf == priv->spi_tx)
+		spin_unlock(&priv->spi_rxtx_lock);
+	else
+		kfree(xfer.tx_buf);
 
 	return ret;
 }
@@ -978,8 +997,10 @@ static int mcp25xxfd_probe(struct spi_device *spi)
 
 	spi_set_drvdata(spi, priv);
 	priv->spi = spi;
+	priv->clk = clk;
 
 	mutex_init(&priv->clk_user_lock);
+	spin_lock_init(&priv->spi_rxtx_lock);
 
 	/* enable the clock and mark as enabled */
 	ret = clk_prepare_enable(clk);
