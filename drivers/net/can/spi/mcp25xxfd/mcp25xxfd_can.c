@@ -106,6 +106,23 @@ unsigned int bw_sharing_log2bits;
 module_param(bw_sharing_log2bits, uint, 0664);
 MODULE_PARM_DESC(bw_sharing_log2bits,
 		 "Delay between 2 transmissions in number of arbitration bit times\n");
+bool enable_edge_filter = false;
+module_param(enable_edge_filter, bool, 0664);
+MODULE_PARM_DESC(enable_edge_filter,
+		 "Enable ISO11898-1:2015 edge_filtering");
+unsigned int tdc_mode;
+module_param(tdc_mode, uint, 0664);
+MODULE_PARM_DESC(tdc_mode,
+		 "Transmitter Delay Mode - 0 = disabled, 1 = fixed, 2 = auto\n");
+int tdc_value;
+module_param(tdc_value, int, 0664);
+MODULE_PARM_DESC(tdc_value,
+		 "Transmission Delay Value - range: [-64:63]");
+unsigned int tdc_offset = 16;
+module_param(tdc_offset, uint, 0664);
+MODULE_PARM_DESC(tdc_offset,
+		 "Transmission Delay Value - range: [0:63]");
+
 /* everything related to bit timing */
 static
 const struct can_bittiming_const mcp25xxfd_can_nominal_bittiming_const = {
@@ -178,9 +195,21 @@ static int mcp25xxfd_can_do_set_data_bittiming(struct net_device *net)
 	int ret;
 
 	/* set up Transmitter delay compensation */
-	if (!cpriv->regs.tdc)
-		cpriv->regs.tdc = CAN_TDC_EDGFLTEN |
-			(CAN_TDC_TDCMOD_AUTO << CAN_TDC_TDCMOD_SHIFT);
+	if (!cpriv->regs.tdc) {
+		/* configure TDC mode */
+		cpriv->regs.tdc = min_t(unsigned int, tdc_mode, 3) <<
+			CAN_TDC_TDCMOD_SHIFT;
+		/* configure TDC offsets */
+		cpriv->regs.tdc |= (clamp_t(int, tdc_offset, -64, 63) <<
+				    CAN_TDC_TDCO_SHIFT) &&
+			CAN_TDC_TDCO_MASK;
+		/* configure TDC value */
+		cpriv->regs.tdc |= min_t(unsigned int, tdc_value, 63) <<
+			CAN_TDC_TDCV_SHIFT;
+		/* enable edge filtering */
+		if (enable_edge_filter)
+			cpriv->regs.tdc |= CAN_TDC_EDGFLTEN;
+	}
 	ret = mcp25xxfd_cmd_write(spi, CAN_TDC, cpriv->regs.tdc);
 	if (ret)
 		return ret;
