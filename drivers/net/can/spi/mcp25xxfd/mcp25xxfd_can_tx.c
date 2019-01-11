@@ -541,6 +541,13 @@ static int mcp25xxfd_can_int_handle_tefif_fifo(struct spi_device *spi)
 				 CAN_TEFCON_UINC);
 }
 
+/* reading TEF entries can be made even more efficient by reading
+ * multiple TEF entries in one go.
+ * Under the assumption that we have count(TEF) >= count(TX_FIFO)
+ * we can even release TEFs early (before we read them)
+ * (and potentially restarting the transmit-queue early aswell)
+ */
+
 static
 int mcp25xxfd_can_int_handle_tefif_conservative(struct spi_device *spi)
 {
@@ -570,6 +577,29 @@ int mcp25xxfd_can_int_handle_tefif_conservative(struct spi_device *spi)
 	return 0;
 }
 
+static
+int mcp25xxfd_can_int_handle_tefif_oportunistic(struct spi_device *spi,
+						u32 finished)
+{
+	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
+	struct net_device *net = priv->net;
+	struct mcp25xxfd_can_priv *cpriv = netdev_priv(net);
+	int i, fifo, ret;
+
+	/* now iterate those */
+	for (i = 0, fifo = cpriv->fifos.tx.start;
+	     i < cpriv->fifos.tx.count;
+	     i++, fifo += cpriv->fifos.tx.increment) {
+		if (finished & BIT(fifo)) {
+			ret = mcp25xxfd_can_int_handle_tefif_fifo(spi);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return 0;
+}
+
 int mcp25xxfd_can_int_handle_tefif(struct spi_device *spi)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
@@ -591,7 +621,15 @@ int mcp25xxfd_can_int_handle_tefif(struct spi_device *spi)
 
 	spin_unlock_irqrestore(&cpriv->fifos.tx_queue->lock, flags);
 
-	return mcp25xxfd_can_int_handle_tefif_conservative(spi);
+	/* in case of a strange situation run in safe mode */
+	if (!finished) {
+		netdev_warn(net,
+			    "Something is wrong - we got a TEF interrupt but we were not able to detect a finished fifo\n");
+		return mcp25xxfd_can_int_handle_tefif_conservative(spi);
+	}
+
+	/* otherwise run in oportunistic mode */
+	return mcp25xxfd_can_int_handle_tefif_oportunistic(spi, finished);
 }
 
 static
