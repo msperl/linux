@@ -198,7 +198,7 @@ int mcp25xxfd_can_submit_rx_frame(struct spi_device *spi, int fifo)
 		flags |= (rx->flags & CAN_OBJ_FLAGS_BRS) ? CANFD_BRS : 0;
 		flags |= (rx->flags & CAN_OBJ_FLAGS_ESI) ? CANFD_ESI : 0;
 		skb = mcp25xxfd_can_submit_rx_fd_frame(net, id, flags,
-						       dlc, &data);
+						       len, &data);
 	} else {
 		skb = mcp25xxfd_can_submit_rx_normal_frame(net, id,
 							   len, &data);
