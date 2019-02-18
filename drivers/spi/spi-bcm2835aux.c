@@ -345,7 +345,9 @@ static int bcm2835aux_spi_transfer_one_poll(struct spi_master *master,
 	while (bs->rx_len) {
 
 		/* do common fifo handling */
-		bcm2835aux_spi_transfer_helper(bs);
+		if (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) &
+		      BCM2835_AUX_SPI_STAT_BUSY))
+			bcm2835aux_spi_transfer_helper(bs);
 
 		/* there is still data pending to read check the timeout */
 		if (bs->rx_len && time_after(jiffies, timeout)) {
