@@ -267,8 +267,10 @@ static irqreturn_t bcm2835aux_spi_interrupt(int irq, void *dev_id)
 			BCM2835_AUX_SPI_CNTL1_IDLE);
 	}
 
-	/* and if rx_len is 0 then disable interrupts and wake up completion */
-	if (!bs->rx_len) {
+  
+	if ((!bs->rx_len) && 
+    (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) & BCM2835_AUX_SPI_STAT_BUSY))) {
+    /* when transfer is complete then disable interrupts and wake up completion */
 		bcm2835aux_wr(bs, BCM2835_AUX_SPI_CNTL1, bs->cntl[1]);
 		complete(&master->xfer_completion);
 	}
@@ -335,8 +337,7 @@ static int bcm2835aux_spi_transfer_one_poll(struct spi_master *master,
 	timeout = jiffies + 2 + HZ * polling_limit_us / 1000000;
 
 	/* loop until finished the transfer */
-	while (bs->rx_len) {
-
+	while ((bs->rx_len) || (bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) & BCM2835_AUX_SPI_STAT_BUSY)) {
 		/* do common fifo handling */
 		bcm2835aux_spi_transfer_helper(bs);
 
