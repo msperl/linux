@@ -232,12 +232,12 @@ static void bcm2835aux_spi_reset_hw(struct bcm2835aux_spi *bs)
 
 static void bcm2835aux_spi_transfer_helper(struct bcm2835aux_spi *bs)
 {
+	u32 stat = bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT);
+
 	/* check if we have data to read */
-	while (bs->rx_len &&
-	       (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) &
-		  BCM2835_AUX_SPI_STAT_RX_EMPTY))) {
+	for (; bs->rx_len && (stat & BCM2835_AUX_SPI_STAT_RX_LVL);
+	     stat = bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT))
 		bcm2835aux_rd_fifo(bs);
-	}
 
 	/* check if we have data to write */
 	while (bs->tx_len &&
@@ -248,7 +248,7 @@ static void bcm2835aux_spi_transfer_helper(struct bcm2835aux_spi *bs)
 	}
 
 	/* and check if we have reached "done" */
-	while (bs->rx_len &&
+	while (bs->rx_len && (!bs->tx_len) && (!bs->pending) &&
 	       (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) &
 		  BCM2835_AUX_SPI_STAT_BUSY))) {
 		bcm2835aux_rd_fifo(bs);
@@ -345,9 +345,7 @@ static int bcm2835aux_spi_transfer_one_poll(struct spi_master *master,
 	while (bs->rx_len) {
 
 		/* do common fifo handling */
-		if (!(bcm2835aux_rd(bs, BCM2835_AUX_SPI_STAT) &
-		      BCM2835_AUX_SPI_STAT_BUSY))
-			bcm2835aux_spi_transfer_helper(bs);
+		bcm2835aux_spi_transfer_helper(bs);
 
 		/* there is still data pending to read check the timeout */
 		if (bs->rx_len && time_after(jiffies, timeout)) {
