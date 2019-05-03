@@ -217,9 +217,13 @@ static int mcp25xxfd_can_int_handle_modif(struct mcp25xxfd_can_priv *cpriv)
 
 	/* get the current mode */
 	ret = mcp25xxfd_can_get_mode(cpriv->priv, &mode);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to get current mode: %i\n", ret);
 		return ret;
-	mode = ret;
+	}
+
+	mode = (mode & MCP25XXFD_CAN_CON_OPMOD_MASK) >>
+		MCP25XXFD_CAN_CON_OPMOD_SHIFT;
 
 	/* switches to the same mode as before are ignored
 	 * - this typically happens if the driver is shortly
@@ -233,9 +237,13 @@ static int mcp25xxfd_can_int_handle_modif(struct mcp25xxfd_can_priv *cpriv)
 	if (mode == MCP25XXFD_CAN_CON_MODE_RESTRICTED) {
 		cpriv->mode = mode;
 		mode = mcp25xxfd_can_targetmode(cpriv);
-		return mcp25xxfd_can_switch_mode_no_wait(cpriv->priv,
+		ret = mcp25xxfd_can_switch_mode_no_wait(cpriv->priv,
 							 &cpriv->regs.con,
 							 mode);
+		if (ret) {
+			netdev_err(cpriv->can.dev, "Failed to switch mode: %i\n", ret);
+			return ret;
+		}
 	}
 
 	/* the controller itself will transition to sleep, so we ignore it */
@@ -445,7 +453,7 @@ static int mcp25xxfd_can_int_handle_ivmif(struct mcp25xxfd_can_priv *cpriv)
 
 static int mcp25xxfd_can_int_handle_cerrif(struct mcp25xxfd_can_priv *cpriv)
 {
-	if (!(cpriv->status.intf & MCP25XXFD_CAN_INT_CERRIF))
+	if (!(cpriv->status.intf & MCP25XXFD_CAN_INT_SERRIE))
 		return 0;
 
 	/* this interrupt exists primarilly to counter possible
@@ -549,62 +557,89 @@ static int mcp25xxfd_can_int_handle_status(struct mcp25xxfd_can_priv *cpriv)
 	 * to get us out of restricted mode
 	 */
 	ret = mcp25xxfd_can_int_handle_serrif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to get system error: %i\n", ret);
 		return ret;
+	}
 
 	/* mode change interrupt */
 	ret = mcp25xxfd_can_int_handle_modif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to handle mode change interrupt: %i\n", ret);
 		return ret;
+	}
 
 	/* handle the rx */
 	ret = mcp25xxfd_can_rx_handle_int_rxif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to handle rx: %i\n", ret);
 		return ret;
+	}
+
 	/* handle aborted TX FIFOs */
 	ret = mcp25xxfd_can_tx_handle_int_txatif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to aborted TX FIFOs: %i\n", ret);
 		return ret;
+	}
 
 	/* handle the TEF */
 	ret = mcp25xxfd_can_tx_handle_int_tefif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to handle the TEF: %i\n", ret);
 		return ret;
+	}
 
 	/* handle error interrupt flags */
 	ret = mcp25xxfd_can_rx_handle_int_rxovif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to handle error interrupt flags: %i\n", ret);
 		return ret;
+	}
 
 	/* sram ECC error interrupt */
 	ret = mcp25xxfd_can_int_handle_eccif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failure in sram ECC error interrupt: %i\n", ret);
 		return ret;
+	}
 
 	/* message format interrupt */
 	ret = mcp25xxfd_can_int_handle_ivmif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failure in message format interrupt: %i\n", ret);
 		return ret;
+	}
 
 	/* handle bus errors in more detail */
 	ret = mcp25xxfd_can_int_handle_cerrif(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed handle bus errors in more detail: %i\n", ret);
 		return ret;
+	}
 
 	/* error counter handling */
 	ret = mcp25xxfd_can_int_error_counters(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failure in error counter handling: %i\n", ret);
 		return ret;
+	}
 
 	/* error counter handling */
 	ret = mcp25xxfd_can_int_error_handling(cpriv);
-	if (ret)
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failure in error handling: %i\n", ret);
 		return ret;
+	}
 
 	/* and submit can frames to network stack */
 	ret = mcp25xxfd_can_int_submit_frames(cpriv);
+	if (ret) {
+		netdev_err(cpriv->can.dev, "Failed to submit can frames to network stack: %i\n", ret);
+		return ret;
+	}
 
-	return ret;
+	return 0;
 }
 
 irqreturn_t mcp25xxfd_can_int(int irq, void *dev_id)
@@ -625,8 +660,10 @@ irqreturn_t mcp25xxfd_can_int(int irq, void *dev_id)
 					      MCP25XXFD_CAN_INT,
 					      &cpriv->status.intf,
 					      sizeof(cpriv->status));
-		if (ret)
-			return ret;
+		if (ret) {
+			netdev_err(cpriv->can.dev, "Failed to read interrupt status flags in bulk : %i\n", ret);
+			break;
+		}
 
 		/* only act if the IE mask configured has active IF bits
 		 * otherwise the Interrupt line should be deasserted already
@@ -638,8 +675,10 @@ irqreturn_t mcp25xxfd_can_int(int irq, void *dev_id)
 
 		/* handle the status */
 		ret = mcp25xxfd_can_int_handle_status(cpriv);
-		if (ret)
-			return ret;
+		if (ret) {
+			netdev_err(cpriv->can.dev, "Failed to get handle status: %i\n", ret);
+			break;
+		}
 
 		/* allow voluntarily rescheduling every so often to avoid
 		 * long CS lows at the end of a transfer on low power CPUs
