@@ -453,7 +453,7 @@ static int mcp25xxfd_can_int_handle_ivmif(struct mcp25xxfd_can_priv *cpriv)
 
 static int mcp25xxfd_can_int_handle_cerrif(struct mcp25xxfd_can_priv *cpriv)
 {
-	if (!(cpriv->status.intf & MCP25XXFD_CAN_INT_SERRIE))
+	if (!(cpriv->status.intf & MCP25XXFD_CAN_INT_SERRIF))
 		return 0;
 
 	/* this interrupt exists primarilly to counter possible
