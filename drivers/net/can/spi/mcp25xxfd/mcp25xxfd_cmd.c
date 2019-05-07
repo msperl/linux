@@ -20,12 +20,15 @@ static int mcp25xxfd_cmd_sync_transfer(struct spi_device *spi,
 				       unsigned int xfers)
 {
 	struct mcp25xxfd_priv *priv = spi_get_drvdata(spi);
-	int i;
+	int i, r;
 
 	for (i = 0; i < xfers; i++)
 		xfer[i].speed_hz = priv->spi_use_speed_hz;
 
-	return spi_sync_transfer(spi, xfer, xfers);
+	r = spi_sync_transfer(spi, xfer, xfers);
+	if (r)
+		dev_err(&spi->dev, "SPI transfer failed.\n");
+	return r;
 }
 
 /* simple spi_write wrapper with speed_hz
