@@ -491,6 +491,7 @@ static int mcp25xxfd_can_int_error_counters(struct mcp25xxfd_can_priv *cpriv)
 		cpriv->error_frame.data[1] |= CAN_ERR_CRTL_RX_PASSIVE;
 	}
 	if (cpriv->status.trec & MCP25XXFD_CAN_TREC_TXBO) {
+		netdev_warn(cpriv->can.dev, "Device went to bus-off\n");
 		cpriv->bus.new_state = CAN_STATE_BUS_OFF;
 		cpriv->error_frame.id |= CAN_ERR_BUSOFF;
 	}
