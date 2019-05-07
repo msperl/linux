@@ -571,6 +571,9 @@ static int mcp25xxfd_can_stop(struct net_device *net)
 	struct mcp25xxfd_priv *priv = cpriv->priv;
 	struct spi_device *spi = priv->spi;
 
+	/* disable inerrupts on controller */
+	mcp25xxfd_int_enable(cpriv->priv, false);
+
 	/* stop transmit queue */
 	mcp25xxfd_can_tx_queue_manage(cpriv,
 				      MCP25XXFD_CAN_TX_QUEUE_STATE_STOPPED);
@@ -580,9 +583,6 @@ static int mcp25xxfd_can_stop(struct net_device *net)
 
 	/* shutdown the can controller */
 	mcp25xxfd_can_shutdown(cpriv);
-
-	/* disable inerrupts on controller */
-	mcp25xxfd_int_enable(cpriv->priv, false);
 
 	/* stop the clock */
 	mcp25xxfd_clock_stop(cpriv->priv, MCP25XXFD_CLK_USER_CAN);
