@@ -76,6 +76,10 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	mcp23s17.dtbo \
 	mcp2515-can0.dtbo \
 	mcp2515-can1.dtbo \
+	mcp2517fd-spi0.0-can0.dtbo \
+	mcp2517fd-spi0.1-can1.dtbo \
+	mcp2517fd-spi1.0-can2.dtbo \
+	mcp2517fd-spi1.1-can3.dtbo \
 	mcp3008.dtbo \
 	mcp3202.dtbo \
 	mcp342x.dtbo \
@@ -104,6 +108,7 @@ dtbo-$(CONFIG_ARCH_BCM2835) += \
 	pwm-2chan.dtbo \
 	pwm-ir-tx.dtbo \
 	qca7000.dtbo \
+	quadcan-fd.dtbo \
 	rotary-encoder.dtbo \
 	rpi-backlight.dtbo \
 	rpi-cirrus-wm5102.dtbo \

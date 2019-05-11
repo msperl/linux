@@ -1,0 +1,139 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2835", "brcm,bcm2836", "brcm,bcm2837", "brcm,bcm2708", "brcm,bcm2709",  "brcm,bcm2710";
+
+    /* disable spi-dev for spi0.0 and spi0.1 */
+    fragment@0 {
+        target = <&spi0>;
+        __overlay__ {
+            status = "okay";
+            spidev@0{
+                status = "disabled";
+            };
+            spidev@1{
+                status = "disabled";
+            };
+        };
+    };
+
+    /* disable spi-dev for spi1.0 and spi1.1 */
+    fragment@1 {
+        target = <&spi1>;
+        __overlay__ {
+            status = "okay";
+            spidev@0{
+                status = "disabled";
+            };
+            spidev@1{
+                status = "disabled";
+            };
+        };
+    };
+
+    fragment@2 {
+        target = <&gpio>;
+        __overlay__ {
+            interrupt_pins: interrupt_pins {
+                brcm,pins = <2 4 6 13>;
+                brcm,function = <0>; /* input */
+            };
+
+            spi1_pins: spi1_pins {
+                brcm,pins = <19 20 21>;
+                brcm,function = <3>; /* alt4 */
+            };
+
+            spi1_cs_pins: spi1_cs_pins {
+                brcm,pins = <17 18>;
+                brcm,function = <1>; /* output */
+            };
+        };
+    };
+
+    /* can oscillator */
+    fragment@3 {
+        target-path = "/clocks";
+        __overlay__ {
+            /* external oscillator of mcp2517s */
+            can_osc: can_osc {
+                #address-cells = <1>;
+                #size-cells = <0>;
+                compatible = "fixed-clock";
+                #clock-cells = <0>;
+                clock-frequency  = <40000000>;
+            };
+        };
+    };
+
+    fragment@4 {
+        target = <&spi0>;
+        __overlay__ {
+            /* needed to avoid dtc warning */
+            #address-cells = <1>;
+            #size-cells = <0>;
+            can0: can@1 {
+                compatible = "microchip,mcp2517fd";
+                reg = <1>;
+                #address-cells = <1>;
+                #size-cells = <0>;
+                clocks = <&can_osc>;
+                interrupt-parent = <&gpio>;
+                interrupts = <4 0x8>;
+                gpio-controller;
+                spi-max-frequency = <20000000>;
+		microchip,gpio0-xstandby;
+            };
+            can1: can@0 {
+                compatible = "microchip,mcp2517fd";
+                reg = <0>;
+                #address-cells = <1>;
+                #size-cells = <0>;
+                clocks = <&can_osc>;
+                interrupt-parent = <&gpio>;
+                interrupts = <2 0x8>;
+                gpio-controller;
+                spi-max-frequency = <20000000>;
+		microchip,gpio0-xstandby;
+            };
+        };
+    };
+
+    fragment@5 {
+        target = <&spi1>;
+        __overlay__ {
+            /* needed to avoid dtc warning */
+            #address-cells = <1>;
+            #size-cells = <0>;
+            pinctrl-names = "default";
+            pinctrl-0 = <&spi1_pins &spi1_cs_pins>;
+            cs-gpios = <&gpio 18 1>, <&gpio 17 1>;
+
+            can2: can@0 {
+                compatible = "microchip,mcp2517fd";
+                reg = <0>;
+                #address-cells = <1>;
+                #size-cells = <0>;
+                clocks = <&can_osc>;
+                interrupt-parent = <&gpio>;
+                interrupts = <13 0x8>;
+                gpio-controller;
+                spi-max-frequency = <20000000>;
+		microchip,gpio0-xstandby;
+            };
+            can3: can@1 {
+                compatible = "microchip,mcp2517fd";
+                reg = <1>;
+                #address-cells = <1>;
+                #size-cells = <0>;
+                clocks = <&can_osc>;
+                interrupt-parent = <&gpio>;
+                interrupts = <6 0x8>;
+                gpio-controller;
+                spi-max-frequency = <20000000>;
+		microchip,gpio0-xstandby;
+            };
+        };
+    };
+};

@@ -1242,6 +1242,31 @@ Params: oscillator              Clock frequency for the CAN controller (Hz)
 
         interrupt               GPIO for interrupt signal
 
+Name:   mcp2517-spi0.0-can0
+Info:   Configures the MCP2517/8 CAN controller on spi0.0
+Load:   dtoverlay=mcp2517-spi0.0-can0,<param>=<val>
+Params: oscillator              Clock frequency for the CAN controller (Hz)
+        spimaxfrequency         Maximum SPI frequence (Hz)
+        interrupt               GPIO for interrupt signal
+        clockdiv                use a clock divider of 2 to get system clock
+        clockoutdiv             clock divider used on clockout (0, 1, 2, 4, 10)
+        opendrain               all pins are open-drain (except for RX-CAN)
+        xstandby                use gpio0 as standby signal for transcciever
+
+Name:   mcp2517-spi0.1-can1
+Info:   Configures the MCP2517/8 CAN controller on spi0.1
+Load:   dtoverlay=mcp2517-spi0.1-can1,<param>=<val>
+Params: <see mcp2517-spi0.0-can0>
+
+Name:   mcp2517-spi1.0-can2
+Info:   Configures the MCP2517/8 CAN controller on spi1.0
+Load:   dtoverlay=mcp2517-spi1.0-can2,<param>=<val>
+Params: <see mcp2517-spi0.0-can0>
+
+Name:   mcp2517-spi1.1-can3
+Info:   Configures the MCP2517/8 CAN controller on spi1.1
+Load:   dtoverlay=mcp2517-spi1.1-can3,<param>=<val>
+Params: <see mcp2517-spi0.0-can0>
 
 Name:   mcp3008
 Info:   Configures MCP3008 A/D converters
@@ -1588,6 +1613,11 @@ Load:   dtoverlay=qca7000,<param>=<val>
 Params: int_pin                 GPIO pin for interrupt signal (default 23)
 
         speed                   SPI bus speed (default 12 MHz)
+
+Name:   quadcan-fd
+Info:   Configures 4 mcp2517fd for the quadcan-fd hat
+Load:   dtoverlay=quadcan-fd
+Params: <None>
 
 
 Name:   rotary-encoder
