@@ -1,0 +1,79 @@
+/*
+ * Device tree overlay for mcp2517fd/can2 on spi0.0
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2835", "brcm,bcm2836", "brcm,bcm2837", "brcm,bcm2708", "brcm,bcm2709",  "brcm,bcm2710";
+    /* disable spi-dev for spi0.0 */
+    fragment@0 {
+        target = <&spi0>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+    fragment@1 {
+	target = <&spidev0>;
+	__overlay__ {
+	    status = "disabled";
+	};
+    };
+
+    /* the interrupt pin of the can-controller */
+    fragment@2 {
+        target = <&gpio>;
+        __overlay__ {
+            can2_pins: can2_pins {
+                brcm,pins = <25>;
+                brcm,function = <0>; /* input */
+            };
+        };
+    };
+
+    /* the clock/oscillator of the can-controller */
+    fragment@3 {
+        target-path = "/clocks";
+        __overlay__ {
+            /* external oscillator of mcp2517fd on SPI0.0 */
+            can2_osc: can2_osc {
+                compatible = "fixed-clock";
+                #clock-cells = <0>;
+                clock-frequency  = <40000000>;
+            };
+        };
+    };
+
+    /* the spi config of the can-controller itself binding everything together */
+    fragment@4 {
+        target = <&spi0>;
+        __overlay__ {
+            /* needed to avoid dtc warning */
+            #address-cells = <1>;
+            #size-cells = <0>;
+            can2: mcp2517fd@0 {
+                reg = <0>;
+                compatible = "microchip,mcp2517fd";
+                pinctrl-names = "default";
+                pinctrl-0 = <&can2_pins>;
+                spi-max-frequency = <20000000>;
+                interrupt-parent = <&gpio>;
+                interrupts = <25 0x8>;
+                clocks = <&can2_osc>;
+                microchip,clock-out-div = <10>;
+            };
+        };
+    };
+
+    __overrides__ {
+        oscillator = <&can2_osc>,"clock-frequency:0";
+        spimaxfrequency = <&can2>,"spi-max-frequency:0";
+        interrupt = <&can2_pins>,"brcm,pins:0",<&can2>,"interrupts:0";
+	clockdiv = <&can2>,"microchip,clock-div?";
+	clockoutdiv = <&can2>,"microchip,clock-out-div:0";
+	opendrain = <&can2>, "microchip,gpio-open-drain?";
+	xstandby = <&can2>, "microchip,gpio0-xstandby?";
+    };
+};
